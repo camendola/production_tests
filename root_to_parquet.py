@@ -303,8 +303,11 @@ def process_chunk(tree, start, stop):
     per_file = {}
     for group_name, branches in BRANCH_GROUPS.items():
         data = tree.arrays(filter_name=branches, entry_start=start, entry_stop=stop, library="ak")
-        # if len(data.fields) == 0:
-        #     continue
+        if len(data.fields) == 0:
+            # optional collection not in this file: MergedSimCluster for pileup
+            # samples (nanoML runMergedSimClusters=0, pepr's SimClusterMerger is
+            # not pileup-aware), the SimTrackster tables for older files
+            continue
 
         # Derive isPileup flag for SimCluster and MergedSimCluster:
         # signal iff bunchCrossing == 0 AND eventId == 0; anything

@@ -8,12 +8,16 @@
 #   generate_photons_FineCalo.sh    generate_photons_noFineCalo.sh
 #   generate_taus_FineCalo.sh       generate_taus_noFineCalo.sh
 #   generate_pions_noFineCalo.sh    generate_K0L_noFineCalo.sh
+#   generate_taus_noFineCalo_30PU.sh
 #
-# set PARTICLE / PARTNAME / USE_FINE_CALO, source this file and call
+# set PARTICLE / PARTNAME / USE_FINE_CALO (and optionally PILEUP, the default
+# average pileup; 0 when unset), source this file and call
 #
 #   run_chain "$@"
 #
-# --particle / --partname / --fine-calo override those defaults.
+# --particle / --partname / --fine-calo / --pileup override those defaults.
+# A new "<particle>_<N>PU" wrapper is therefore a copy of the matching
+# noFineCalo wrapper with PILEUP=<N> added (useFineCalo=1 has no PU support).
 #
 # which runs   [MINBIAS] -> GSD -> RECO -> nanoML -> parquet
 # as a sequence of local `cmsRun` invocations (single machine, no batch system).
@@ -24,7 +28,7 @@
 set -o pipefail
 
 chain_usage() {
-    local pu_note="  --pileup N             average pileup (default: 0 = no PU)
+    local pu_note="  --pileup N             average pileup (default: ${PILEUP:-0}; 0 = no PU)
   --pu FILE              existing minbias GEN-SIM file to mix (implies --pileup if unset);
                          when --pileup > 0 and --pu is not given, MINBIAS_GENSIM.py is run first
   --nminbias N           events for the auto-generated minbias library (default: n_events)"
@@ -36,7 +40,7 @@ chain_usage() {
     cat <<EOF
 Usage: $CHAIN_SCRIPT_NAME <output_directory> [n_events] [options]
 
-Runs the full ${PARTNAME:-particle-gun} chain (useFineCalo=${USE_FINE_CALO}):
+Runs the full ${PARTNAME:-particle-gun} chain (useFineCalo=${USE_FINE_CALO}, pileup=${PILEUP:-0}):
 [MINBIAS] -> GSD -> RECO -> nanoML -> parquet.
 
 Positional:
@@ -152,6 +156,9 @@ chain_parquet_cmd() {
 
 # run_step <description> <logfile> <command...>
 # Honours --dry-run, tees combined output to <logfile>, aborts the chain on failure.
+# If CHAIN_STEP_OUTPUT names the step's output file, a failed step deletes it:
+# cmsRun closes a partial file on an exception, and --resume would otherwise
+# take it for a finished one and skip the step.
 chain_run_step() {
     local desc="$1"; shift
     local logfile="$1"; shift
@@ -168,8 +175,13 @@ chain_run_step() {
     "$@" 2>&1 | tee "$logfile"
     local rc=$?
     if [ $rc -ne 0 ]; then
+        if [ -n "${CHAIN_STEP_OUTPUT:-}" ] && [ -e "$CHAIN_STEP_OUTPUT" ]; then
+            rm -f "$CHAIN_STEP_OUTPUT"
+            echo "   removed partial output $CHAIN_STEP_OUTPUT (--resume will rerun this step)" >&2
+        fi
         chain_die "Failed: $desc (exit $rc) — see $logfile"
     fi
+    CHAIN_STEP_OUTPUT=""
     echo ""
 }
 
@@ -193,7 +205,8 @@ run_chain() {
     # ---- defaults -------------------------------------------------------
     local OUTPUT_DIR="" NEVENTS=1000
     local SEED=1 MIN_ENERGY=20.0 MAX_ENERGY=200.0 GUN=flatEta NTHREADS=1
-    local PILEUP=0 PU_FILE="" NMINBIAS=""
+    # PILEUP may be preset by the wrapper (generate_taus_noFineCalo_30PU.sh sets 30).
+    local PILEUP="${PILEUP:-0}" PU_FILE="" NMINBIAS=""
     local RUN_PFTRUTH=0 DO_PARQUET=1 SPLIT=0
     RESUME=0
     DRY_RUN=0
@@ -235,6 +248,8 @@ run_chain() {
     [ ${#positional[@]} -ge 2 ] && NEVENTS="${positional[1]}"
     [ ${#positional[@]} -gt 2 ] && chain_die "Too many positional arguments: ${positional[*]}"
 
+    [[ "$PILEUP" =~ ^[0-9]+$ ]] || chain_die "--pileup must be a non-negative integer (got '$PILEUP')"
+
     # A --pu file without an explicit --pileup still means "mix pileup".
     if [ -n "$PU_FILE" ] && [ "$PILEUP" -eq 0 ]; then
         PILEUP=30
@@ -264,6 +279,13 @@ run_chain() {
     if [ "$PILEUP" -gt 0 ] && [ "$RUN_PFTRUTH" -eq 1 ]; then
         chain_die "--run-pftruth is incompatible with pileup (the PFTruth sequence is broken with PU)."
     fi
+
+    # pepr's SimClusterMerger (hgcSimTruth -> MergedSimCluster tables) only knows
+    # the signal SimTracks/SimVertices and throws on the first pileup SimCluster,
+    # so nanoML_cfg.py drops it for PU samples (runMergedSimClusters=0). The
+    # pileup-aware MergedCaloTruthMergedSimCluster tables are still written.
+    local RUN_MERGED_SC=1
+    [ "$PILEUP" -gt 0 ] && RUN_MERGED_SC=0
 
     mkdir -p "$OUTPUT_DIR" || chain_die "Cannot create output directory: $OUTPUT_DIR"
     OUTPUT_DIR=$(realpath "$OUTPUT_DIR")
@@ -307,6 +329,11 @@ run_chain() {
         echo "  pileup        : 0 (none)"
     fi
     echo "  runPFTruth    : $RUN_PFTRUTH"
+    if [ "$RUN_MERGED_SC" -eq 1 ]; then
+        echo "  MergedSimClus : on (pepr SimClusterMerger)"
+    else
+        echo "  MergedSimClus : off (pepr SimClusterMerger is not pileup-aware; MergedCaloTruthMergedSimCluster is kept)"
+    fi
     if [ "$DO_PARQUET" -eq 1 ]; then
         echo "  parquet       : $PARQUET_SCRIPT -> $PARQUET_NAME"
         if [ -n "${PARQUET_PYTHON:-}" ]; then
@@ -326,7 +353,13 @@ run_chain() {
     if [ "$PILEUP" -gt 0 ] && [ -z "$PU_FILE" ]; then
         # Offset the minbias seed from the signal seed, as condor/run_stage.sh does.
         local MINBIAS_SEED=$((SEED + 500000))
+        if [ "$NMINBIAS" -lt "$PILEUP" ]; then
+            echo "⚠  minbias library of $NMINBIAS events is smaller than the average pileup ($PILEUP):"
+            echo "   the same minbias events will be mixed many times over; raise --nminbias for a real sample."
+            echo ""
+        fi
         if ! chain_skip "MINBIAS step" "$MINBIAS_FILE"; then
+            CHAIN_STEP_OUTPUT="$MINBIAS_FILE"
             chain_run_step "Running MINBIAS step (${NMINBIAS} events, seed=${MINBIAS_SEED})" \
                 "$LOG_DIR/${TAG}_minbias.log" \
                 cmsRun "$REPO_DIR/MINBIAS_GENSIM.py" \
@@ -354,12 +387,14 @@ run_chain() {
     [ "$PILEUP" -gt 0 ] && gsd_args+=(pu="$PU_FILE")
 
     if ! chain_skip "GSD step" "$GSD_FILE"; then
+        CHAIN_STEP_OUTPUT="$GSD_FILE"
         chain_run_step "Running GSD step" "$LOG_DIR/${TAG}_gsd.log" \
             cmsRun "$REPO_DIR/GSD_GUN.py" "${gsd_args[@]}"
     fi
 
     # ---- step 3: RECO -----------------------------------------------------
     if ! chain_skip "RECO step" "$RECO_FILE"; then
+        CHAIN_STEP_OUTPUT="$RECO_FILE"
         chain_run_step "Running RECO step" "$LOG_DIR/${TAG}_reco.log" \
             cmsRun "$REPO_DIR/RECO.py" \
                 nThreads="$NTHREADS" \
@@ -370,10 +405,12 @@ run_chain() {
 
     # ---- step 4: nanoML ---------------------------------------------------
     if ! chain_skip "nanoML step" "$NANO_FILE"; then
+        CHAIN_STEP_OUTPUT="$NANO_FILE"
         chain_run_step "Running nanoML step" "$LOG_DIR/${TAG}_nanoml.log" \
             cmsRun "$REPO_DIR/nanoML_cfg.py" \
                 nThreads="$NTHREADS" \
                 runPFTruth="$RUN_PFTRUTH" \
+                runMergedSimClusters="$RUN_MERGED_SC" \
                 inputFiles="file:$RECO_FILE" \
                 outputFile="$NANO_FILE"
     fi
@@ -383,6 +420,7 @@ run_chain() {
     if [ "$DO_PARQUET" -eq 1 ]; then
         if ! chain_skip "parquet step" "$OUTPUT_DIR/$PARQUET_NAME"; then
             chain_parquet_cmd
+            CHAIN_STEP_OUTPUT="$OUTPUT_DIR/$PARQUET_NAME"
             chain_run_step "Converting to parquet ($PARQUET_SCRIPT)" \
                 "$LOG_DIR/${TAG}_parquet.log" \
                 "${PARQUET_CMD[@]}" "$REPO_DIR/$PARQUET_SCRIPT" \

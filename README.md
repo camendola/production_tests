@@ -122,6 +122,12 @@ cmsRun nanoML_cfg.py inputFiles=file:testRECO.root outputFile=testNanoML.root
 
 Options:
 - `runPFTruth={0,1}` — PFTruth sequence (currently broken with pileup).
+- `runMergedSimClusters={0,1}` — pepr's `SimClusterMerger` (`hgcSimTruth`) and the
+  `MergedSimCluster` tables (default 1). Must be 0 for pileup samples: the merger
+  only knows the signal `g4SimHits` SimTracks/SimVertices and throws
+  (`vector::_M_range_check`) on the first pileup SimCluster. The pileup-aware
+  `MergedCaloTruthMergedSimCluster` tables are not affected. `scripts/chain_common.sh`
+  and `condor/run_stage.sh` set it automatically from the pileup value.
 
 ## Nano output — the RecHit → TICLCand chain
 
@@ -200,7 +206,7 @@ Options (`submit_dag.sh` accepts every `build_dag.sh` option):
 | `--partname`        | `photon` (used for file naming)                                         |
 | `--fine-calo`       | off (`useFineCalo=0`); incompatible with `--pileup`                     |
 | `--gun`             | `flatEta`; `closeBy` starts the particle on the HGCAL front face (see GSD options) |
-| `--pileup`          | `0` (no PU). Set > 0 to enable minbias mixing.                          |
+| `--pileup`          | `0` (no PU). Set > 0 to enable minbias mixing. With pileup use `--ncpus 3` (GSD peaks at 6 GB RSS at PU 30) and budget ≈ 4 MB/event of nanoML; GSD/RECO are 26/31 MB per event, which is why only the chain mode is viable (see the pileup campaign in CLAUDE.md). |
 | `--nminbias`        | equal to `--nevents`. Minbias events per replica.                       |
 | `--outdir`          | `/store/user/$USER/production_tests/pre4_D128` (LPC), `/eos/user/<u>/$USER/production_tests/pre4_D128` (CERN) |
 | `--workdir`         | `condor/` — where the DAG, submit file and `logs/` are written; must not be on EOS |
@@ -324,6 +330,21 @@ that preset it:
 | pi+ (`211`)    | —                                                                                        | [`generate_pions_noFineCalo.sh`](scripts/generate_pions_noFineCalo.sh)                         |
 | K0L (`130`)    | —                                                                                        | [`generate_K0L_noFineCalo.sh`](scripts/generate_K0L_noFineCalo.sh)                             |
 
+[`generate_taus_noFineCalo_30PU.sh`](scripts/generate_taus_noFineCalo_30PU.sh)
+is the `noFineCalo` tau wrapper with `--pileup 30` preset: it runs the
+`MINBIAS → GSD(PU) → RECO → nanoML → parquet` chain and tags its files
+`taus_stdCalo_PU30_*`. A wrapper for another particle or pileup value is a
+copy of the matching `noFineCalo` script with `PILEUP=<N>` added.
+
+Pileup samples have no `MergedSimCluster` collection: pepr's
+`SimClusterMerger` is not pileup-aware (see `runMergedSimClusters` in the
+nanoML options above), so the chain runs nanoML with
+`runMergedSimClusters=0` whenever `--pileup > 0`, and the parquet scripts
+skip the group. `SimCluster`, the pileup-aware
+`MergedCaloTruthMergedSimCluster`, CaloParticles, the TICL tracksters, the
+SimTracksters and the reco↔sim associations are all written as usual, and
+`*_isPileup` flags signal vs. pileup objects in the parquet.
+
 All of them are thin wrappers around the shared driver
 [`scripts/chain_common.sh`](scripts/chain_common.sh), which holds the
 actual chain logic (argument parsing, step sequencing, logging, error
@@ -355,6 +376,8 @@ bash scripts/generate_photons_noFineCalo.sh /path/to/output/folder 1000
 
 # With pileup: the minbias library is generated automatically with
 # MINBIAS_GENSIM.py (seed = signal seed + 500000), unless --pu is given.
+bash scripts/generate_taus_noFineCalo_30PU.sh /path/to/out 1000              # taus, 30 PU preset
+bash scripts/generate_taus_noFineCalo_30PU.sh /path/to/out 10 --nminbias 100 # short test: library >= PU
 bash scripts/generate_photons_noFineCalo.sh /path/to/out 500 --pileup 140 --nminbias 500
 
 # Any particle: --particle sets the pdgId (file names use --partname, by
@@ -380,13 +403,13 @@ Options (all optional, after the two positional arguments):
 | `--minE X` / `--maxE X` | gun energy range in GeV (defaults `20.0` / `200.0`) |
 | `--gun NAME` | `flatEta` (default) or `closeBy`, see the GSD options; `closeBy` leaves -z empty, so keep the default (non-split) parquet |
 | `--nthreads N` | threads per `cmsRun` step (default `1`) |
-| `--pileup N` | average pileup (default `0`); `noFineCalo` scripts only |
+| `--pileup N` | average pileup (default `0`, `30` in `generate_taus_noFineCalo_30PU.sh`); `noFineCalo` scripts only |
 | `--pu FILE` | mix an existing minbias GEN-SIM file instead of generating one |
 | `--nminbias N` | events for the auto-generated minbias library (default: `n_events`) |
 | `--run-pftruth` | enable the nanoML PFTruth sequence (broken with pileup) |
 | `--split` | use `root_to_parquet-split.py` (one row per HGCAL endcap) |
 | `--no-parquet` | stop after the nanoML step |
-| `--resume` | skip any step whose output file already exists |
+| `--resume` | skip any step whose output file already exists (a failed step deletes its partial output, so it is rerun) |
 | `--dry-run` | print the commands that would run, execute nothing |
 
 Each run writes `<tag>_GSD.root`, `<tag>_RECO.root`, `<tag>_DQM.root`,

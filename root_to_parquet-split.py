@@ -442,6 +442,8 @@ def _split_rechits(d, keep, maps, flip):
         ('RecHitHGC_MergedCaloTruthMergedSimClusterBestMatchIdx',
          'RecHitHGC_MergedCaloTruthMergedSimClusterBestMatchQual', 'MergedCaloTruthMergedSimCluster'),
     ):
+        if idxf not in d.fields or tgt not in maps:
+            continue  # optional collection (see build_endcap) not in this file
         out[idxf] = _remap(d[idxf], maps[tgt])[k]
         out[qualf] = d[qualf][k]
 
@@ -677,22 +679,22 @@ def build_endcap(batch, side):
                         "ticlSimTracksters", "ticlSimTrackstersFromCPs")
             if grp in keep}
 
-    out = {
-        "RecHitHGC": _split_rechits(batch["RecHitHGC"], keep, maps, flip),
-        "MergedSimCluster": _split_simclusters(
-            batch["MergedSimCluster"], "MergedSimCluster",
-            keep["MergedSimCluster"], flip),
-        "MergedCaloTruthMergedSimCluster": _split_simclusters(
-            batch["MergedCaloTruthMergedSimCluster"], "MergedCaloTruthMergedSimCluster",
-            keep["MergedCaloTruthMergedSimCluster"], flip),
-        "SimCluster": _split_simclusters(
-            batch["SimCluster"], "SimCluster", keep["SimCluster"], flip),
-        "LayerCluster": _split_layerclusters(batch["LayerCluster"], keep, maps, flip),
-        "TICLCand": _split_ticlcands(batch["TICLCand"], keep["TICLCand"], flip),
-        "Candidate2Tracksters": _split_candidates(
-            batch["Candidate2Tracksters"], keep["TICLCand"],
-            maps[CAND_TRACKSTER_COLLECTION]),
-    }
+    out = {}
+    out["RecHitHGC"] = _split_rechits(batch["RecHitHGC"], keep, maps, flip)
+    # The merged SimCluster families are optional: MergedSimCluster is absent
+    # from pileup samples (nanoML runMergedSimClusters=0, pepr's merger is not
+    # pileup-aware), MergedCaloTruthMergedSimCluster from pre-20_1 files. The
+    # column order is kept so that schemas stay mergeable with older files.
+    for grp in ("MergedSimCluster", "MergedCaloTruthMergedSimCluster"):
+        if grp in keep:
+            out[grp] = _split_simclusters(batch[grp], grp, keep[grp], flip)
+    out["SimCluster"] = _split_simclusters(
+        batch["SimCluster"], "SimCluster", keep["SimCluster"], flip)
+    out["LayerCluster"] = _split_layerclusters(batch["LayerCluster"], keep, maps, flip)
+    out["TICLCand"] = _split_ticlcands(batch["TICLCand"], keep["TICLCand"], flip)
+    out["Candidate2Tracksters"] = _split_candidates(
+        batch["Candidate2Tracksters"], keep["TICLCand"],
+        maps[CAND_TRACKSTER_COLLECTION])
     for grp in ("ticlTrackstersCLUE3DHigh", "ticlTracksterLinks",
                 "ticlTrackstersRecovery"):
         out[grp] = _split_tracksters(batch[grp], grp, keep[grp],
@@ -994,6 +996,11 @@ def process_chunk(tree, start, stop):
     per_file = {}
     for group_name, branches in BRANCH_GROUPS.items():
         data = tree.arrays(filter_name=branches, entry_start=start, entry_stop=stop, library="ak")
+        if len(data.fields) == 0:
+            # optional collection not in this file: MergedSimCluster for pileup
+            # samples (nanoML runMergedSimClusters=0, pepr's SimClusterMerger is
+            # not pileup-aware), the SimTrackster tables for older files
+            continue
 
         # Derive isPileup flag for SimCluster and MergedSimCluster:
         # signal iff bunchCrossing == 0 AND eventId == 0; anything

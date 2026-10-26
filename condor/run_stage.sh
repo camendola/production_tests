@@ -68,6 +68,9 @@ for var in STAGE PARTICLE PARTNAME SEED REPLICA NEVENTS OUTDIR; do
 done
 if [ -n "$ENERGY" ]; then MINE="$ENERGY"; MAXE="$ENERGY"; fi
 [ -n "$NMINBIAS" ] || NMINBIAS="$NEVENTS"
+# pepr's SimClusterMerger (hgcSimTruth -> MergedSimCluster tables) is not pileup-aware
+# (it throws on the first pileup SimCluster), so nanoML drops it for PU samples.
+RUN_MERGED_SC=1; [ "$PILEUP" -gt 0 ] && RUN_MERGED_SC=0
 
 # ---- naming (must match build_dag.sh) -----------------------------------
 fmt0() { printf "%.0f" "$1"; }
@@ -201,7 +204,7 @@ run_reco() {
 run_nano() {
     echo "--- nanoML $(date -u +%FT%TZ)"
     "${TIME[@]}" cmsRun "$CFG_DIR/nanoML_cfg.py" nThreads="$NTHREADS" runPFTruth=0 \
-        inputFiles="file:${RECO_OUT}" outputFile="$NANO_OUT"
+        runMergedSimClusters="$RUN_MERGED_SC" inputFiles="file:${RECO_OUT}" outputFile="$NANO_OUT"
     check_out "$NANO_OUT"
 }
 

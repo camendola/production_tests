@@ -57,6 +57,10 @@ cmsRun RECO.py inputFiles=file:testGSD.root outputFile=testRECO.root
 ```shell
 cmsRun nanoML_cfg.py inputFiles=file:testRECO.root outputFile=testNanoML.root
 # runPFTruth={0,1} — PFTruth sequence, currently broken with pileup (default 0)
+# runMergedSimClusters={0,1} — pepr SimClusterMerger (hgcSimTruth) + MergedSimCluster tables
+#   (default 1); MUST be 0 with pileup: the merger walks the signal-only g4SimHits
+#   SimTrack/SimVertex history and throws vector::_M_range_check on the first pileup
+#   SimCluster. chain_common.sh / condor/run_stage.sh set it from the pileup value.
 ```
 `nanoML_cfg.py` is now the only nano config on this branch — it produces a single flat
 NanoAOD file (~600 branches) that already includes the TICL trackster/candidate tables,
@@ -73,6 +77,12 @@ The CMSSW python has uproot/awkward but no `pyarrow`, so this step needs another
 `scripts/chain_common.sh` runs it via `apptainer exec --cleanenv` in the
 `hgcal-offline-reco:3.12-latest` image (`/cvmfs/unpacked.cern.ch/gitlab-registry.cern.ch/cms-cmu/hgcal-ml4reco/`,
 override with `PARQUET_IMAGE`, or set `PARQUET_PYTHON` to skip the container).
+
+**One-shot local chain:** the `scripts/generate_*.sh` wrappers (and the generic `scripts/generate.sh --particle <pdgId>`)
+source `scripts/chain_common.sh` and run `[MINBIAS →] GSD → RECO → nanoML → parquet` on one machine; they preset
+`PARTICLE`/`PARTNAME`/`USE_FINE_CALO` and optionally `PILEUP`. `scripts/generate_taus_noFineCalo_30PU.sh` presets
+`PILEUP=30` (minbias library of `n_events` events generated with seed+500000, `--nminbias`/`--pu` to change that,
+files tagged `taus_stdCalo_PU30_*`); only the `noFineCalo` configuration supports pileup.
 
 `root_to_parquet-split.py` also accepts an XRootD URL as `--outputDir` (e.g.
 `root://cmsdata.phys.cmu.edu//store/group/hgcal-ml-reconstruction/training_datasets/<dataset>`):
@@ -122,7 +132,7 @@ Selects between three base fragments: `GSDfineCalo_fragment` (`useFineCalo=1`, n
 Always imports `RECO_fragment` (TICL v5 is the default in pre1; the `ticl_v5`-suffixed fragment no longer exists, and `useTICL` is kept only for CLI compatibility). Explicitly instantiates and schedules truth-matching association producers (`lcAssocByEnergyScoreProducer`, `layerClusterCaloParticleAssociationProducer`, `scAssocByEnergyScoreProducer`, `layerClusterSimClusterAssociationProducer`, `simHitTPAssocProducer`, `trackingParticleRecoTrackAsssociation`) as a `cms.Task` added to `recosim_step`. Also schedules the MC-truth tracksters and their associators, which in CMSSW live only in the validation sequence: `filteredLayerClustersSimTracksters` + `ticlSimTracksters` (products under the single module label `ticlSimTracksters`: SimCluster/CaloParticle-seeded tracksters in the default instance, `fromCPs`, `PU`, sim `TICLCandidate`s, and a CaloParticle→SimTrackster index map), `allLayerClusterToTracksterAssociations`, `allHitToTracksterAssociations`, `hitToSimClusterCaloParticleAssociator`, `allTrackstersToSimTrackstersAssociationsByLCs`/`ByHits` (reco↔sim trackster scores, instance labels like `ticlTrackstersCLUE3DHighToticlSimTracksters`), and `SimClusterToCaloParticleAssociation`. Each SimTrackster carries `seedID()`/`seedIndex()` pointing at the SimCluster or CaloParticle it was built from (`mix:MergedCaloTruth`). Note the LC→SimCluster / LC→CaloParticle associator module labels must match their producer types, since `ticlSimTracksters` consumes them by label with distinct C++ types. Also runs pepr's `SimClusterMerger` (mergedSimClusters). The `outputCommands` list is carefully curated to retain all objects needed by `nanoML_cfg.py`.
 
 ### nanoML_cfg.py
-Builds a fresh `cms.Process('NANO')` (no imported base process; geometry loaded directly as `GeometryExtendedRun4D128`/`GeometryExtendedRun4D128Reco`). Loads `DPGAnalysis.HGCalNanoAOD.nanoHGCML_cff` and applies `customizeMergedSimClusters()` and `customizeReco()`. Disables `pfTruth`/`trackSCAssocTable` sequences when `runPFTruth=0` (needed with pileup). Removes the `iso` field from `genParticleTable` to avoid missing-product errors. Adds bespoke TICL nano tables not covered by the default event content:
+Builds a fresh `cms.Process('NANO')` (no imported base process; geometry loaded directly as `GeometryExtendedRun4D128`/`GeometryExtendedRun4D128Reco`). Loads `DPGAnalysis.HGCalNanoAOD.nanoHGCML_cff` and applies `customizeMergedSimClusters()` and `customizeReco()`. Disables `pfTruth`/`trackSCAssocTable` sequences when `runPFTruth=0` (needed with pileup), and removes the whole `mergedSimClusterTables` sequence (`hgcSimTruth`, `closeBySimClusters`, `MergedSimCluster` table + extensions, `RecHitHGC_MergedSimClusterBestMatch*`) when `runMergedSimClusters=0` (needed with pileup: pepr's `SimClusterMerger` builds its `SimHistoryTool` from the signal-only `g4SimHits` SimTracks/SimVertices and the first pileup SimCluster indexes past them — `vector::_M_range_check: __n (which is 1027) >= this->size() (which is 65)`). Pileup samples therefore have `SimCluster` and the pileup-aware `MergedCaloTruthMergedSimCluster` truth but no `MergedSimCluster`; `root_to_parquet*.py` skip an absent branch group. Removes the `iso` field from `genParticleTable` to avoid missing-product errors. Adds bespoke TICL nano tables not covered by the default event content:
 - `ticlCandidateTable` (`TICLCandidateTableProducer`) — kinematics for `ticlCandidate` → `TICLCand`.
 - `ticlCandidateExtraTable` (`TICLCandidateExtraTableProducer`) — `Candidate2Tracksters` index table linking TICLCandidates to their tracksters.
 - One `TracksterCollectionTableProducer` per TICL iteration (`ticlTrackstersCLUE3DHigh`, `ticlTracksterLinks`, `ticlTracksterRecovery`, `ticlTracksterLinksSuperclusteringDNN`), each carrying a `tracksterVertices` collection variable that gives the Trackster↔LayerCluster link.
@@ -141,6 +151,7 @@ Flatten nanoML ROOT files into parquet for ML training, grouping branches by obj
 - **`canDeleteEarly`**: Applied via `customiseEarlyDelete(process)` in `nanoML_cfg.py` to reduce peak memory.
 - **Output content management**: `outputCommands.append/extend` is used deliberately — dropping a product here will break downstream steps that read it.
 - **Pileup discrimination**: signal vs. pileup for SimClusters/MergedSimClusters is derived downstream (in `root_to_parquet*.py`) from `bunchCrossing`/`eventId`, not stored as a flag in the nano tree itself.
+- **Pileup chain status**: validated end to end on lxplus (2026-10-25/26). With a realistic 1000-event minbias library and 30 PU, one tau event is GSD 26 MB, RECO 31 MB, nanoML ≈ 3.8 MB (vs 1.2 / 1.5 / 0.15 without PU) and holds ≈ 3500 SimClusters of which ≈ 3400 are pileup; a 10-event library makes the same files 2–3× smaller because the repeated minbias events compress, so never size a campaign from a tiny-library test. `TruthGraphAccumulator` warns in GSD about missing tracker/ME0 sub-event hit collections, which do not exist in the Phase-2 geometry — harmless. Resources and rates: see "Pileup campaign" in the playbook.
 
 ## Batch Submission
 
@@ -234,6 +245,35 @@ Per-job stdout/stderr (`logs/<node>.out/.err`) is only written back when the job
 - Output: nanoML ≈ 0.15 MB/event for taus (75 MB per 500 events, 7.4 GB for 50k), 0.12–0.21 MB/event for photons from 2 to 300 GeV; endcap-split parquet ≈ 190 KB/event (9.8 GB for the tau set, 313 columns). Sandbox usage per job stays below 2 GB (GSD + RECO of 500 events) and is cleaned at the end.
 - `+JobFlavour = "workday"` (8 h) is comfortable for 500 taus or 250 photons; do not go beyond ~1500 tau events or ~700 300-GeV photons per job without `tomorrow`.
 
+### Pileup campaign: taus 10k at 30 PU (prepared 2026-10-26, NOT yet submitted)
+
+An interactive `scripts/generate_taus_noFineCalo_30PU.sh <eos dir> 10000 --nminbias 1000` run died in GSD after 1974 events with
+`FileWriteError: syswrite() failed with system error 'File too large' (error code 27)`: that is how the EOS FUSE mount reports
+the exhausted home quota (100 %, "exceeded"), and with 30 PU the GSD file alone would have been 250 GB. Pileup intermediates can
+only live in a condor sandbox, so the campaign is the condor chain mode with `--keep nano`. Everything is prepared in
+`/afs/cern.ch/user/m/mmarcheg/condor/taus_noFineCalo_with_tracksters_30PU_10k/` (`submit.sh` runs the exact command below, the
+DAG/JDL are built): it was not submitted because `/eos/user/m/mmarcheg` has no free quota, the account is not in `cms-eos-hgcal`
+(`eos root://eoscms.cern.ch member cms-eos-hgcal` → false) and no VOMS proxy exists for the CMU T3 (`build_dag.sh` would also
+need to ship a proxy at CERN, as `submit_parquet.sh` does). The user's 1000-event minbias library from the interactive run is at
+`/eos/user/m/mmarcheg/ml4reco/data/taus_noFineCalo_with_tracksters_30PU_10k/taus_stdCalo_PU30_MINBIAS.root` (1.8 GB).
+
+```shell
+# needs ~40 GB free under --outdir (nanoML ≈ 3.8 MB/event at 30 PU); OUTDIR=<other area> bash submit.sh to redirect
+bash submit_dag.sh --particle 15 --partname taus --minE 20 --maxE 200 --pileup 30 --nminbias 100 \
+    --nreplicas 100 --nevents 100 --canary 5 --ncpus 3 --nthreads 1 --flavour tomorrow --seed-base 1620000 \
+    --cmssw-base /afs/cern.ch/work/m/mmarcheg/private/ml4reco/phase2/CMSSW_20_1_0_pre4 \
+    --outdir /eos/user/m/mmarcheg/ml4reco/data/taus_noFineCalo_with_tracksters_30PU_10k \
+    --workdir /afs/cern.ch/user/m/mmarcheg/condor/taus_noFineCalo_with_tracksters_30PU_10k
+```
+
+Why these numbers (measured on lxplus with 1 thread and the 1000-event library, 2026-10-26):
+- Peak RSS: GSD 6.0 GB, RECO 4.3 GB, nanoML 3.2 GB → `--ncpus 3` (9 GB at 3 GB/core; 2 cores would sit at the limit).
+- Rates: minbias 4.5 s/event, GSD 27 s/event at 1 thread (the user's multi-threaded interactive runs did 12.6 s/event), RECO ≈ 6 s/event after a 13 s first event, nanoML ≈ 5 s/event (one run showed a 4-minute first event, not reproduced — lxplus I/O). With the ≈ 3× batch slowdown a 100-event job is ≈ 25 min minbias + 2h15 GSD + 35 min RECO + 15 min nanoML ≈ 3.5 h → `--flavour tomorrow` (workday would probably do, with a 2× margin).
+- Sizes per event: minbias 1.9 MB, GSD 26 MB, RECO 31 MB, nanoML ≈ 3.8 MB (10k events ≈ 40 GB of nanoML, endcap-split parquet probably ≈ 50 GB). Sandbox peak ≈ 6 GB per 100-event job (default `request_disk` 20 GB). `submit_dag.sh` scales its quota estimate from these PU 30 numbers.
+- `--nminbias 100` = one 100-event library per job (seed + 500000), i.e. 10k distinct minbias events over the dataset — more variety than the single 1000-event library of the interactive run, for 25 min of minbias generation per job. Each signal event draws ≈ 16 bunch crossings × 30 events from the library, so minbias events are reused within a job whatever the size.
+- `--seed-base 1620000`: the default (particle·100000 + minE·1000 = 1520000) is the no-PU tau campaign's, which would reproduce exactly the same 10k signal taus (the gun and Geant4 seeds precede the mixing); 1620000–1620100 (minbias 2120000–2120100) are disjoint from everything produced so far. If a paired with/without-PU sample is ever wanted, drop the option.
+- nanoML runs with `runMergedSimClusters=0` (set by `run_stage.sh` from `pileup=30`): no `MergedSimCluster` tables, see "nanoML_cfg.py" above.
+
 ### Lessons learned
 
 1. **Storage before submission.** The CERN EOS home (1 TB) was at 99.9 % and the AFS work area (100 GB) at 100 % when the tau campaign was prepared; `/eos/cms/store/user/<user>` did not exist and `/eos/cms/store/group/hgcal/ML4Reco` (76 TB free, used by colleagues) is only writable for members of the `cms-eos-hgcal` e-group. `submit_dag.sh` now probes a 1 MB write and compares the free `eos quota` with the estimated output; it refuses to submit when the kept outputs do not fit. Keep only nanoML on EOS and put parquet on the CMU T3. Put `--workdir` on the AFS home (DAG files and logs cannot live on EOS).
@@ -243,6 +283,7 @@ Per-job stdout/stderr (`logs/<node>.out/.err`) is only written back when the job
 5. **Intermediates are gone by design** (`--keep nano`). Pass `--keep nano,reco` or `--keep nano,reco,gsd` to a *new* submission if they are needed; a running campaign cannot be changed. Account for ≈ 1.2 (GSD) + 1.5 (RECO) MB per event.
 6. **No FineCalo in these sets**: `useFineCalo=0` means the standard CaloTruth (`mix:MergedCaloTruth` SimClusters/CaloParticles and the `MergedCaloTruthMergedSimCluster` collection); SimTracksters are seeded from those. FineCalo variants (`--fine-calo`) are a separate configuration and do not support pileup.
 7. **Chain mode vs stages mode**: at CERN one job runs GSD → RECO → nanoML (default `--mode chain`); the per-stage layout (`--mode stages`, LPC default) stages every intermediate out and back and is only useful where storage is plentiful.
+8. **"File too large" on EOS means quota, and pileup means chain mode.** cmsRun writing to `/eos/user/...` through FUSE fails with `FileWriteError ... 'File too large' (error code 27)` when the quota node is exhausted; `eos root://eosuser.cern.ch quota /eos/user/<u>/<user>` shows it. With pileup the GSD/RECO files are ≈ 20× the no-PU ones (26 / 31 MB per event at PU 30), so never run a pileup production interactively onto EOS: use the condor chain with `--keep nano` and budget ≈ 4 MB per event of nanoML.
 
 ## MC truth
 We are using this repo to produce the samples for our MaskFormer training. Different possibilities for the MC truth are possible:

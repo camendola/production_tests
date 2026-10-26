@@ -14,6 +14,10 @@ options.register("nThreads", 1, VarParsing.multiplicity.singleton, VarParsing.va
     "number of threads")
 options.register("runPFTruth", 0, VarParsing.multiplicity.singleton, VarParsing.varType.int,
     "Don't run PFTruth (currently not working with pileup)")
+options.register("runMergedSimClusters", 1, VarParsing.multiplicity.singleton, VarParsing.varType.int,
+    "Run pepr's SimClusterMerger (hgcSimTruth) and the MergedSimCluster tables (default 1). "
+    "Set to 0 for pileup samples: the merger is not pileup-aware and throws on the first "
+    "pileup SimCluster (see the comment next to customizeMergedSimClusters below).")
 options.parseArguments()
 
 # import of standard configurations
@@ -469,6 +473,22 @@ from DPGAnalysis.HGCalNanoAOD.HGCalNanoAOD_pepr_cff import customizeReco,customi
 # merged simclusters (turn off if you aren't running through PEPR)
 process = customizeMergedSimClusters(process)
 process = customizeReco(process)
+
+# pepr's SimClusterMerger (module hgcSimTruth, HGCSimTruth/HGCSimTruth) is not
+# pileup-aware: it builds its SimHistoryTool from the signal-only g4SimHits
+# SimTracks/SimVertices and then walks the SimTrack/SimVertex history of every
+# SimCluster in mix:MergedCaloTruth. With pileup the first SimCluster from a
+# minbias sub-event indexes a vertex that is not in the event
+# (vector::_M_range_check: __n (which is 1027) >= this->size() (which is 65)).
+# runMergedSimClusters=0 drops the whole mergedSimClusterTables sequence:
+# hgcSimTruth, closeBySimClusters, the MergedSimCluster table and its
+# SimCluster/recEnergy extensions, and RecHitHGC_MergedSimClusterBestMatch*.
+# The pileup-aware MergedCaloTruthMergedSimCluster tables (built in the mixing
+# module at GSD time) and everything else are unaffected.
+if not options.runMergedSimClusters:
+    for seq in (process.nanoHGCMLSequence, process.nanoHGCMLRecoSequence):
+        while seq.remove(process.mergedSimClusterTables):
+            pass
 
 # End of customisation functions
 

@@ -218,17 +218,30 @@ fi
 # ---- EOS quota check (CERN EOS instances only) ---------------------------
 # Rough per-event output sizes in MB, from the 10k-event tau runs (Sep 2026):
 # nanoML 0.15, GSD 1.2, RECO 1.5 (no PU). Slightly inflated below for margin.
+# With pileup (measured 2026-10-26 at PU 30 with a 1000-event minbias library,
+# taus 20-200 GeV): GSD 26, RECO 31, nanoML 3.8, minbias library 1.9 MB/event;
+# they grow roughly linearly with the pileup, so the PU 30 numbers are scaled.
 if [ "$WRITE_TEST" -eq 1 ] && [ -n "$XHOST" ] && [ -n "$NREPLICAS" ] && [ -n "$NEVENTS" ] \
    && command -v eos >/dev/null 2>&1; then
     case "$XHOST" in *.cern.ch)
         PER_EVENT_MB=0
+        PUSCALE=$(echo "$PILEUP / 30" | bc -l)
         for sub in $SUBDIRS; do
-            case "$sub" in
-                nanoML)  PER_EVENT_MB=$(echo "$PER_EVENT_MB + 0.2" | bc -l) ;;
-                GSD)     PER_EVENT_MB=$(echo "$PER_EVENT_MB + 1.3" | bc -l) ;;
-                RECO)    PER_EVENT_MB=$(echo "$PER_EVENT_MB + 1.6" | bc -l) ;;
-                MINBIAS) PER_EVENT_MB=$(echo "$PER_EVENT_MB + 0.5" | bc -l) ;;
-            esac
+            if [ "$PILEUP" -gt 0 ]; then
+                case "$sub" in
+                    nanoML)  PER_EVENT_MB=$(echo "$PER_EVENT_MB + 4.0 * $PUSCALE" | bc -l) ;;
+                    GSD)     PER_EVENT_MB=$(echo "$PER_EVENT_MB + 28 * $PUSCALE" | bc -l) ;;
+                    RECO)    PER_EVENT_MB=$(echo "$PER_EVENT_MB + 33 * $PUSCALE" | bc -l) ;;
+                    MINBIAS) PER_EVENT_MB=$(echo "$PER_EVENT_MB + 2.0" | bc -l) ;;
+                esac
+            else
+                case "$sub" in
+                    nanoML)  PER_EVENT_MB=$(echo "$PER_EVENT_MB + 0.2" | bc -l) ;;
+                    GSD)     PER_EVENT_MB=$(echo "$PER_EVENT_MB + 1.3" | bc -l) ;;
+                    RECO)    PER_EVENT_MB=$(echo "$PER_EVENT_MB + 1.6" | bc -l) ;;
+                    MINBIAS) PER_EVENT_MB=$(echo "$PER_EVENT_MB + 0.5" | bc -l) ;;
+                esac
+            fi
         done
         NEED_GB=$(printf "%.1f" "$(echo "$NREPLICAS * $NEVENTS * $PER_EVENT_MB / 1000" | bc -l)")
         QUOTA=$(eos "root://${XHOST}" quota "$XPATH" 2>/dev/null | awk '
@@ -238,6 +251,7 @@ if [ "$WRITE_TEST" -eq 1 ] && [ -n "$XHOST" ] && [ -n "$NREPLICAS" ] && [ -n "$N
         if [ -n "$QUOTA" ]; then
             read -r Q_FILLED Q_FREE_GB Q_STATUS <<< "$QUOTA"
             echo "EOS quota for ${OUTDIR}: ${Q_FILLED}% used, ${Q_FREE_GB} GB free (logical); this campaign needs ~${NEED_GB} GB (${SUBDIRS// /,})"
+            [ "$PILEUP" -gt 0 ] && echo "note: per-event sizes scaled from PU 30 taus (nanoML 3.8, GSD 26, RECO 31 MB/event)"
             # EOS flags the volume "exceeded" well before the logical quota is
             # full (physical replicas); the write probe above is authoritative,
             # so only the free-vs-needed comparison blocks the submission.
