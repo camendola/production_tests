@@ -144,6 +144,10 @@ process.FEVTDEBUGoutput.outputCommands.extend(["keep *_MergedTrackTruth_*_*",
     "keep *_simTrack*_*_*",
     "keep *_simHit*_*_*",
     "keep *_mix_MergedCaloTruth*_*",
+    # Save MC-truth graph
+    "keep *_truthGraphProducer_*_*",
+    "keep *_truthLogicalGraphProducer_*_*",
+    "keep *_truthLogicalGraphHitIndexProducer_*_*",
     # MC-truth tracksters and their associations (see block above). The
     # FEVTDEBUG content already lists most of these;
     # they are repeated here so the file documents what nanoML relies on.
