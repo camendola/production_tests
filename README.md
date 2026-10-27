@@ -9,6 +9,7 @@ For the `CMSSW_20_0_0_pre1` / `Run4D121` version, see the `pre1_D121` branch;
 for `CMSSW_15_1_0` / `Run4D110`, see the `master` branch.
 
 ## Setup
+The installation instruction in this branch **do not include the custom code from cms-pepr**. The installation starts from Felice's TICLv6 branch and just adds a custom particle gun on top of it.
 
 ```shell
 export SCRAM_ARCH=el9_amd64_gcc14
@@ -17,9 +18,9 @@ cmsrel $version
 cd $version/src
 cmsenv
 git cms-init -y
-git cms-merge-topic dgaytanv:pepr_${version}
-git cms-checkdeps -a   # pepr changes the SimCluster layout: rebuild every package that uses it
-scram b -j 4      # -j 12 can OOM on cmslpc
+git cms-rebase-topic felicepantaleo:ticlv6-20_1_0_pre4
+git cms-merge-topic mmarchegiani:flatetagun-20_1_0_pre4 # Add particle gun shooting with flat eta distribution
+scram b -j 8
 
 # Reco fragments
 git clone git@github.com:dgaytanv/reco-prodtools.git reco_prodtools
@@ -28,8 +29,8 @@ cd reco_prodtools/templates/python
 cd ../../..
 scram b           # registers reco_prodtools.templates.* as python modules
 
-# This repo (pre4_D128 branch)
-git clone -b pre4_D128 git@github.com:dgaytanv/production_tests.git
+# This repo (ticlv6-20_1_0_pre4 branch)
+git clone -b ticlv6-20_1_0_pre4 git@github.com:mmarchegiani/production_tests.git
 cd production_tests
 ```
 
