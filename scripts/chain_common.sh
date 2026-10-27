@@ -72,6 +72,9 @@ ${pu_note}
   -h, --help             show this help
 
 Environment:
+  NANO_CFG               nano config run in step 4 (default: nanoML_cfg.py, which needs
+                         the pepr packages; nanoTruth_cfg.py writes the TICL tables and
+                         the MC-truth-graph tables without them)
   PARQUET_IMAGE          apptainer image used to run the parquet step (the CMSSW
                          python from cmsenv has no pyarrow). The script binds
                          /afs, /cvmfs, /tmp, /eos/cms, /eos/user/<u>/\$USER, the repo and
@@ -407,7 +410,7 @@ run_chain() {
     if ! chain_skip "nanoML step" "$NANO_FILE"; then
         CHAIN_STEP_OUTPUT="$NANO_FILE"
         chain_run_step "Running nanoML step" "$LOG_DIR/${TAG}_nanoml.log" \
-            cmsRun "$REPO_DIR/nanoML_cfg.py" \
+            cmsRun "$REPO_DIR/${NANO_CFG:-nanoML_cfg.py}" \
                 nThreads="$NTHREADS" \
                 runPFTruth="$RUN_PFTRUTH" \
                 runMergedSimClusters="$RUN_MERGED_SC" \

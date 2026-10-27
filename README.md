@@ -129,6 +129,26 @@ Options:
   `MergedCaloTruthMergedSimCluster` tables are not affected. `scripts/chain_common.sh`
   and `condor/run_stage.sh` set it automatically from the pileup value.
 
+### 3b. nanoTruth (MC-truth graph truth, no pepr dependency)
+
+`nanoTruth_cfg.py` writes the TICL tables plus the MC-truth-graph truth of
+the calo-boundary particles (`TruthCB`) and its reco <-> truth association
+tables (`CLUE3DHighToTruthCB`, `LayerClusterToTruthCB`, `TruthCBToCLUE3DHigh`,
+`TruthCBToLayerCluster`). It needs only the TICLv6 + truth-graph packages, so
+it is the nano step of the hackathon area, where `nanoML_cfg.py` (pepr
+tables) cannot run. The RECO file must come from `RECO.py` with its default
+`truthAssoc=1`, from a GSD produced by the current `GSD_GUN.py` (which keeps
+the DIGI-built truth graph).
+
+```shell
+cmsRun nanoTruth_cfg.py inputFiles=file:testRECO.root outputFile=testNanoTruth.root
+python3 scripts/check_truth_tables.py testNanoTruth.root          # index / physics sanity checks
+NANO_CFG=nanoTruth_cfg.py bash scripts/generate_photons_noFineCalo.sh /path/to/out 100
+```
+
+See the "MC-truth graph" section of CLAUDE.md for the definitions, the
+module names and the table columns.
+
 ## Nano output — the RecHit → TICLCand chain
 
 The chain from RecHits to TICLCandidates is available via three index
@@ -290,13 +310,18 @@ candidates `SimTICLCand` / `SimCandidate2Tracksters`, and the reco↔sim
 trackster association tables such as `CLUE3DHighToSimTSByHits`).
 
 Derived boolean fields are added: `SimCluster_isPileup`,
-`MergedSimCluster_isPileup` and
-`MergedCaloTruthMergedSimCluster_isPileup`, computed as
-`~((bunchCrossing == 0) & (eventId == 0))`, plus
+`MergedSimCluster_isPileup`, `MergedCaloTruthMergedSimCluster_isPileup`
+and `TruthCB_isPileup`, computed as
+`~((bunchCrossing == 0) & (eventId == 0))`, `TruthCB_hasHGCALHits`
+(`TruthCB_simEnergyHGCAL > 0`), plus
 `ticlSimTracksters_seedIsCaloParticle` /
 `ticlSimTrackstersFromCPs_seedIsCaloParticle`, telling whether a
 SimTrackster's `seedIndex` points into the `CaloPart` table (true) or
-into the `SimCluster` table (false).
+into the `SimCluster` table (false). The MC-truth-graph groups (`TruthCB`
+and the `*ToTruthCB` / `TruthCBTo*` association tables) and every legacy
+group are optional, so files from both `nanoML_cfg.py` and
+`nanoTruth_cfg.py` convert; a parquet folder must not mix the two (the
+schemas differ).
 
 ```shell
 python3 root_to_parquet.py \

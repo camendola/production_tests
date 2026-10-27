@@ -34,6 +34,10 @@ options.register("pu", "", VarParsing.multiplicity.singleton, VarParsing.varType
 options.register("gun", "flatEta", VarParsing.multiplicity.singleton, VarParsing.varType.string,
     "particle gun: flatEta (from the origin, nParticles into each endcap, |eta| 1.5-3.0) "
     "or closeBy (nParticles starting on the +z HGCal front face, R 60-120 cm, z 320-321 cm)")
+options.register("truthReduced", 0, VarParsing.multiplicity.singleton, VarParsing.varType.int,
+    "MC-truth graph scope: 0 = full detector (calo + MTD + muon + tracker, the default), "
+    "1 = drop the tracker channel (customiseTruthReduced), enough for the calorimeter "
+    "associators and cheaper at DIGI")
 options.parseArguments()
 
 # Import process based on useFineCalo and pileup flags.
@@ -85,6 +89,20 @@ process.FEVTDEBUGoutput.fileName = cms.untracked.string(
 process.FEVTDEBUGoutput.outputCommands.append("keep *_*G4*_*_*")
 process.FEVTDEBUGoutput.outputCommands.append("keep SimClustersedmAssociation_mix_*_*")
 process.FEVTDEBUGoutput.outputCommands.append("keep CaloParticlesedmAssociation_mix_*_*")
+
+# MC-truth graph (PhysicsTools/TruthInfo). The Phase2C26I13M9 era carries the enableTruth
+# modifier, so the TruthGraphAccumulator already runs inside the mixing module (hence its
+# warnings about absent sub-event hit collections) and the pileup-aware logical graph +
+# hit index producers (truthLogicalGraphProducer, truthLogicalGraphHitIndexProducer) sit
+# in pdigiTask, which runs them only when something keeps their products. The era adds
+# the keeps to FEVTDEBUGHLT and RECOSIM, not to the FEVTDEBUG content written here, so
+# they are added by hand: the compact truth (logical graph, unresolved hit index, raw
+# merged graph TruthGraph_mix). RECO.py consumes these; it must never rebuild them.
+from PhysicsTools.TruthInfo.truthEventContent_cff import setTruthEventContent
+process = setTruthEventContent(process)
+if options.truthReduced:
+    from PhysicsTools.TruthInfo.mixedTruthGraphCustomize import customiseTruthReduced
+    process = customiseTruthReduced(process)
 
 
 # helper

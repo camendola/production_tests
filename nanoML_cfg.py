@@ -448,9 +448,16 @@ process.mergedCaloTruthMergedSimClusterTask = cms.Task(
     process.hgcRecHitsToMergedCaloTruthMergedSimClusterTable,
 )
 
+# MC-truth graph: the calo-boundary truth table (TruthCB) and the CLUE3DHigh /
+# LayerCluster <-> TruthCB association tables, from the maps RECO.py produces with
+# truthAssoc=1 (PhysicsTools/TruthInfo/python/truthNanoTables_cff.py). The producers
+# write empty tables when a RECO file carries no maps (older productions).
+process.load("PhysicsTools.TruthInfo.truthNanoTables_cff")
+
 # Path and EndPath definitions
 process.nanoAOD_step = cms.Path(process.nanoHGCMLSequence, process.ticlTablesTask,
-                                 process.mergedCaloTruthMergedSimClusterTask)
+                                 process.mergedCaloTruthMergedSimClusterTask,
+                                 process.truthNanoTablesTask)
 
 process.endjob_step = cms.EndPath(process.endOfProcess)
 process.NANOAODSIMoutput_step = cms.EndPath(process.NANOAODSIMoutput)

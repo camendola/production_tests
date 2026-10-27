@@ -14,6 +14,12 @@ options.register("nThreads", 1, VarParsing.multiplicity.singleton, VarParsing.va
     "number of threads")
 options.register("useTICL", 0, VarParsing.multiplicity.singleton, VarParsing.varType.int,
     "use TICL v5 (1=True, 0=False)")
+options.register("truthAssoc", 1, VarParsing.multiplicity.singleton, VarParsing.varType.int,
+    "associate ticlTrackstersCLUE3DHigh and hgcalMergeLayerClusters to the calo-boundary "
+    "particles of the MC-truth graph (1=True, 0=False)")
+options.register("truthFullGraph", 0, VarParsing.multiplicity.singleton, VarParsing.varType.int,
+    "also run the stock full-graph adaptive trackster associators (every TICL trackster "
+    "collection, every truth level, adaptive climb) for merged-topology studies (1=True, 0=False)")
 options.parseArguments()
 
 # Import process based on useTICL flag
@@ -113,6 +119,50 @@ process.simTracksters = cms.Sequence(process.ticlSimTrackstersTask)
 
 process.recosim_step *= process.simTracksters
 
+# ---------------------------------------------------------------------------
+# MC-truth graph (PhysicsTools/TruthInfo) as training truth.
+# The graph and its hit index were built at DIGI by GSD_GUN.py (pileup-aware, under the
+# era's enableTruth modifier) and are read from the input file. They are CONSUMED here,
+# never rebuilt: a graph rebuilt at RECO would be signal-only (cms-truth docs, "Consume,
+# do not rebuild"), so the guard below refuses a process that carries the producers.
+#
+# truthCaloBoundaryAssociators_cff matches ticlTrackstersCLUE3DHigh and
+# hgcalMergeLayerClusters to the calo-boundary particles (truth::Level::CaloBoundary, one
+# per outward tracker->calorimeter crossing, the SimCluster analogue; signal and in-time
+# pile-up). Products, read by the nano step:
+#   truthBranchTargetsCaloBoundary          "truthToRecoTargetsCaloBoundary": the target ids
+#   truthCaloBoundaryTracksterAssociators   "ticlTrackstersCLUE3DHighRecoToTruth{Fixed,
+#                                           AdaptiveTight,AdaptiveNominal}" and
+#                                           "ticlTrackstersCLUE3DHighTruthToReco"
+#   truthCaloBoundaryLayerClusterAssociators the same four for hgcalMergeLayerClusters
+# ---------------------------------------------------------------------------
+for _m in ("truthGraphProducer", "truthLogicalGraphProducer", "truthLogicalGraphHitIndexProducer"):
+    assert not hasattr(process, _m), (
+        f"{_m} is scheduled in the RECO process: the MC-truth graph must be consumed from the "
+        "GSD file, not rebuilt here (a rebuilt graph is signal-only)")
+
+if options.truthAssoc:
+    process.load("SimGeneral.TruthGraphAssociatorProducers.truthCaloBoundaryAssociators_cff")
+    process.truthAssoc = cms.Sequence(process.truthCaloBoundaryAssociatorsSequence)
+    process.recosim_step *= process.truthAssoc
+
+if options.truthFullGraph:
+    # The documented customise (customiseTruthGraphAssociators) also schedules the track,
+    # vertex, PF-cluster and HLT domains, whose inputs this chain does not carry, so only
+    # the trackster domain is taken: every scheduled TICL trackster producer, found by type.
+    # (setTracksterLabelsFromProcess cannot be used: it must run before the associator
+    # cff is imported, which truthAssoc=1 already did; the labels are discovered the same
+    # way and set on a clone instead.)
+    from SimGeneral.TruthGraphAssociatorProducers.truthGraphAssociationLabels_cff import tracksterLabelsFromProcess
+    from SimGeneral.TruthGraphAssociatorProducers.truthGraphAssociators_cff import truthBranchTargets, truthBranchTracksterAssociators
+    _tracksterLabels = tracksterLabelsFromProcess(process) or ["ticlTrackstersCLUE3DHigh"]
+    process.truthBranchTargets = truthBranchTargets
+    process.truthBranchTracksterAssociators = truthBranchTracksterAssociators.clone(
+        recoCollections=[cms.InputTag(l) for l in _tracksterLabels],
+        pfRecHits=cms.VInputTag())
+    process.truthFullGraphAssoc = cms.Sequence(process.truthBranchTargets + process.truthBranchTracksterAssociators)
+    process.recosim_step *= process.truthFullGraphAssoc
+
 # Print out event content for debugging
 #process.dump=cms.EDAnalyzer('EventContentAnalyzer')
 #process.recosim_step += process.dump
@@ -144,10 +194,13 @@ process.FEVTDEBUGoutput.outputCommands.extend(["keep *_MergedTrackTruth_*_*",
     "keep *_simTrack*_*_*",
     "keep *_simHit*_*_*",
     "keep *_mix_MergedCaloTruth*_*",
-    # Save MC-truth graph
-    "keep *_truthGraphProducer_*_*",
-    "keep *_truthLogicalGraphProducer_*_*",
-    "keep *_truthLogicalGraphHitIndexProducer_*_*",
+    # The MC-truth graph products (logical graph, hit index, raw merged graph) are added
+    # below by setTruthEventContent; the reco -> truth association maps here.
+    "keep *_truthBranchTargetsCaloBoundary_*_*",
+    "keep *_truthCaloBoundaryTracksterAssociators_*_*",
+    "keep *_truthCaloBoundaryLayerClusterAssociators_*_*",
+    "keep *_truthBranchTargets_*_*",
+    "keep *_truthBranchTracksterAssociators_*_*",
     # MC-truth tracksters and their associations (see block above). The
     # FEVTDEBUG content already lists most of these;
     # they are repeated here so the file documents what nanoML relies on.
@@ -161,6 +214,11 @@ process.FEVTDEBUGoutput.outputCommands.extend(["keep *_MergedTrackTruth_*_*",
     "keep *_allLayerClusterToTracksterAssociations_*_*",
     "keep *_SimClusterToCaloParticleAssociation_*_*",
 ])
+
+# Carry the DIGI-built truth (truthLogicalGraphProducer, truthLogicalGraphHitIndexProducer,
+# TruthGraph_mix) through to the RECO file: the nano step reads the graph and the hit index.
+from PhysicsTools.TruthInfo.truthEventContent_cff import setTruthEventContent
+process = setTruthEventContent(process)
 
 process.options.numberOfThreads=cms.untracked.uint32(options.nThreads)
 

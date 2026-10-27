@@ -35,10 +35,13 @@ def parse_args():
 # Branches grouped by object family. Prefixes match the nano flat table
 # naming: e.g. "SimCluster_" branches all belong to the SimCluster object.
 #
-# Note: SimCluster_isPileup, MergedSimCluster_isPileup and
-# MergedCaloTruthMergedSimCluster_isPileup are derived in process_chunk() from
-# the corresponding bunchCrossing/eventId branches (signal iff BX==0 AND
-# eventId==0). They are not read from disk.
+# Note: SimCluster_isPileup, MergedSimCluster_isPileup,
+# MergedCaloTruthMergedSimCluster_isPileup and TruthCB_isPileup are derived in
+# process_chunk() from the corresponding bunchCrossing/eventId(eventIndex)
+# branches (signal iff BX==0 AND eventId==0), TruthCB_hasHGCALHits from
+# TruthCB_simEnergyHGCAL. They are not read from disk. Every group is optional:
+# a nanoTruth_cfg.py file has no RecHit, SimCluster, MergedSimCluster or
+# TICLCand tables, a nanoML_cfg.py file (as of Oct 2026) no TruthCB tables.
 BRANCH_GROUPS = {
     "RecHitHGC": [
         'RecHitHGC_x', 'RecHitHGC_y', 'RecHitHGC_z',
@@ -231,17 +234,77 @@ for _reco_grp, _reco_short in SIM_ASSOC_RECO.items():
             SIM_ASSOC_TABLES[f"{_sim_short}To{_reco_short}{_type}"] = (_sim_grp, _reco_grp)
 
 
-def _assoc_branches(name):
+def _assoc_branches(name, values=("sharedEnergy", "score")):
+    """Branches of a one-to-many association table: per-row count/offset, the flat
+    link table with the linked index and the value columns `values` (a value a file
+    lacks is skipped by filter_name)."""
     return [
         f'n{name}',
         f'{name}_n{name}Links', f'{name}_o{name}Links',
         f'n{name}Links',
-        f'{name}Links_index', f'{name}Links_sharedEnergy', f'{name}Links_score',
-    ]
+        f'{name}Links_index',
+    ] + [f'{name}Links_{v}' for v in values]
 
 
 for _name in SIM_ASSOC_TABLES:
     BRANCH_GROUPS[_name] = _assoc_branches(_name)
+
+
+# ---------------------------------------------------------------------------
+# MC-truth graph: calo-boundary truth objects and their associations
+# (see nanoTruth_cfg.py / nanoML_cfg.py and PhysicsTools/TruthInfo/python/truthNanoTables_cff.py)
+# ---------------------------------------------------------------------------
+
+# TruthCB: one row per particle of the MC-truth graph at the tracker-calorimeter
+# boundary (truth::Level::CaloBoundary, the SimCluster analogue), signal and in-time
+# pileup. graphId is the particle id in the truth graph (the key the association
+# maps use); parentGraphId / genRootGraphId are graph ids too, not rows of this
+# table. TruthCB_isPileup and TruthCB_hasHGCALHits are derived in process_chunk().
+TRUTH_CB_GROUP = "TruthCB"
+BRANCH_GROUPS[TRUTH_CB_GROUP] = [
+    'TruthCB_graphId', 'TruthCB_pdgId', 'TruthCB_charge',
+    'TruthCB_isSignal', 'TruthCB_bunchCrossing', 'TruthCB_eventIndex',
+    'TruthCB_pt', 'TruthCB_eta', 'TruthCB_phi', 'TruthCB_energy',
+    'TruthCB_hasBoundary',
+    'TruthCB_boundaryX', 'TruthCB_boundaryY', 'TruthCB_boundaryZ', 'TruthCB_boundaryT',
+    'TruthCB_boundaryPx', 'TruthCB_boundaryPy', 'TruthCB_boundaryPz', 'TruthCB_boundaryE',
+    'TruthCB_boundaryPt', 'TruthCB_boundaryEta', 'TruthCB_boundaryPhi',
+    'TruthCB_simEnergyHGCAL', 'TruthCB_levelFlags',
+    'TruthCB_parentGraphId', 'TruthCB_genRootGraphId',
+]
+
+# Reco <-> TruthCB association tables, same count/offset + flat Links layout as the
+# SIM_ASSOC_TABLES: <reco>ToTruthCB rows are parallel to the reco collection and the
+# link index is a TruthCB row; TruthCBTo<reco> rows are parallel to TruthCB and the
+# link index is a reco row. Reco->truth links carry sharedEnergy (GeV), truth->reco
+# links the sim-normalised sharedEnergyFraction; both carry graphId and score (lower
+# is better). Absent tables are skipped like every optional group.
+TRUTH_ASSOC_RECO = {"ticlTrackstersCLUE3DHigh": "CLUE3DHigh", "LayerCluster": "LayerCluster",
+                    "ticlTracksterLinks": "Links"}
+TRUTH_ASSOC_VALUES = ("graphId", "sharedEnergy", "sharedEnergyFraction", "score")
+# table name -> (source group, target group)
+TRUTH_ASSOC_TABLES = {}
+for _reco_grp, _reco_short in TRUTH_ASSOC_RECO.items():
+    TRUTH_ASSOC_TABLES[f"{_reco_short}ToTruthCB"] = (_reco_grp, TRUTH_CB_GROUP)
+    TRUTH_ASSOC_TABLES[f"TruthCBTo{_reco_short}"] = (TRUTH_CB_GROUP, _reco_grp)
+for _name in TRUTH_ASSOC_TABLES:
+    BRANCH_GROUPS[_name] = _assoc_branches(_name, TRUTH_ASSOC_VALUES)
+
+# <group>: (bunchCrossing branch, event branch); signal iff both are 0.
+PILEUP_KEYS = {
+    "SimCluster": ("SimCluster_bunchCrossing", "SimCluster_eventId"),
+    "MergedSimCluster": ("MergedSimCluster_bunchCrossing", "MergedSimCluster_eventId"),
+    "MergedCaloTruthMergedSimCluster": ("MergedCaloTruthMergedSimCluster_bunchCrossing",
+                                        "MergedCaloTruthMergedSimCluster_eventId"),
+    TRUTH_CB_GROUP: ("TruthCB_bunchCrossing", "TruthCB_eventIndex"),
+}
+
+
+def _derive_truth_cb_flags(data):
+    """TruthCB_hasHGCALHits: the object left sim energy in HGCAL (a barrel crosser or a
+    particle absorbed before the calorimeter has none and is not a trainable target)."""
+    if "TruthCB_simEnergyHGCAL" in data.fields:
+        data["TruthCB_hasHGCALHits"] = data["TruthCB_simEnergyHGCAL"] > 0
 
 
 def _derive_sim_trackster_flags(per_file):
@@ -314,17 +377,12 @@ def process_chunk(tree, start, stop):
         # else is pileup (either OOT via BX != 0 or in-time PU
         # minbias via eventId != 0).
 
-        if group_name in ("SimCluster", "MergedSimCluster", "MergedCaloTruthMergedSimCluster"):
-            bx_branch = f"{group_name}_bunchCrossing"
-            ev_branch = f"{group_name}_eventId"
+        if group_name in PILEUP_KEYS:
+            bx_branch, ev_branch = PILEUP_KEYS[group_name]
             is_pileup = ~((data[bx_branch] == 0) & (data[ev_branch] == 0))
             data[f"{group_name}_isPileup"] = is_pileup
-
-        # if group_name == "SimCluster":
-        #     bx_branch = "SimCluster_bunchCrossing"
-        #     ev_branch = "SimCluster_eventId"
-        #     is_pileup = ~((data[bx_branch] == 0) & (data[ev_branch] == 0))
-        #     data["SimCluster_isPileup"] = is_pileup
+        if group_name == TRUTH_CB_GROUP:
+            _derive_truth_cb_flags(data)
 
         per_file[group_name] = data
 
@@ -358,7 +416,8 @@ def main():
     print(f"Collections: {', '.join(BRANCH_GROUPS.keys())}")
     print(f"Derived fields: SimCluster_isPileup, MergedSimCluster_isPileup, "
           f"MergedCaloTruthMergedSimCluster_isPileup, "
-          f"ticlSimTracksters_seedIsCaloParticle, ticlSimTrackstersFromCPs_seedIsCaloParticle")
+          f"ticlSimTracksters_seedIsCaloParticle, ticlSimTrackstersFromCPs_seedIsCaloParticle, "
+          f"TruthCB_isPileup, TruthCB_hasHGCALHits")
     print(f"Writing incrementally to {output_path}")
 
     parquet_writer = None

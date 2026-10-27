@@ -203,7 +203,8 @@ run_reco() {
 }
 run_nano() {
     echo "--- nanoML $(date -u +%FT%TZ)"
-    "${TIME[@]}" cmsRun "$CFG_DIR/nanoML_cfg.py" nThreads="$NTHREADS" runPFTruth=0 \
+    # NANO_CFG=nanoTruth_cfg.py selects the pepr-free config with the MC-truth-graph tables.
+    "${TIME[@]}" cmsRun "$CFG_DIR/${NANO_CFG:-nanoML_cfg.py}" nThreads="$NTHREADS" runPFTruth=0 \
         runMergedSimClusters="$RUN_MERGED_SC" inputFiles="file:${RECO_OUT}" outputFile="$NANO_OUT"
     check_out "$NANO_OUT"
 }

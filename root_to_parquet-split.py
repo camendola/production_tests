@@ -50,10 +50,13 @@ def parse_args():
 # Branches grouped by object family. Prefixes match the nano flat table
 # naming: e.g. "SimCluster_" branches all belong to the SimCluster object.
 #
-# Note: SimCluster_isPileup, MergedSimCluster_isPileup and
-# MergedCaloTruthMergedSimCluster_isPileup are derived in process_chunk() from
-# the corresponding bunchCrossing/eventId branches (signal iff BX==0 AND
-# eventId==0). They are not read from disk.
+# Note: SimCluster_isPileup, MergedSimCluster_isPileup,
+# MergedCaloTruthMergedSimCluster_isPileup and TruthCB_isPileup are derived in
+# process_chunk() from the corresponding bunchCrossing/eventId(eventIndex)
+# branches (signal iff BX==0 AND eventId==0), TruthCB_hasHGCALHits from
+# TruthCB_simEnergyHGCAL. They are not read from disk. Every group is optional:
+# a nanoTruth_cfg.py file has no RecHit, SimCluster, MergedSimCluster or
+# TICLCand tables, a nanoML_cfg.py file (as of Oct 2026) no TruthCB tables.
 BRANCH_GROUPS = {
     "RecHitHGC": [
         'RecHitHGC_x', 'RecHitHGC_y', 'RecHitHGC_z',
@@ -253,17 +256,77 @@ for _reco_grp, _reco_short in SIM_ASSOC_RECO.items():
             SIM_ASSOC_TABLES[f"{_sim_short}To{_reco_short}{_type}"] = (_sim_grp, _reco_grp)
 
 
-def _assoc_branches(name):
+def _assoc_branches(name, values=("sharedEnergy", "score")):
+    """Branches of a one-to-many association table: per-row count/offset, the flat
+    link table with the linked index and the value columns `values` (a value a file
+    lacks is skipped by filter_name)."""
     return [
         f'n{name}',
         f'{name}_n{name}Links', f'{name}_o{name}Links',
         f'n{name}Links',
-        f'{name}Links_index', f'{name}Links_sharedEnergy', f'{name}Links_score',
-    ]
+        f'{name}Links_index',
+    ] + [f'{name}Links_{v}' for v in values]
 
 
 for _name in SIM_ASSOC_TABLES:
     BRANCH_GROUPS[_name] = _assoc_branches(_name)
+
+
+# ---------------------------------------------------------------------------
+# MC-truth graph: calo-boundary truth objects and their associations
+# (see nanoTruth_cfg.py / nanoML_cfg.py and PhysicsTools/TruthInfo/python/truthNanoTables_cff.py)
+# ---------------------------------------------------------------------------
+
+# TruthCB: one row per particle of the MC-truth graph at the tracker-calorimeter
+# boundary (truth::Level::CaloBoundary, the SimCluster analogue), signal and in-time
+# pileup. graphId is the particle id in the truth graph (the key the association
+# maps use); parentGraphId / genRootGraphId are graph ids too, not rows of this
+# table. TruthCB_isPileup and TruthCB_hasHGCALHits are derived in process_chunk().
+TRUTH_CB_GROUP = "TruthCB"
+BRANCH_GROUPS[TRUTH_CB_GROUP] = [
+    'TruthCB_graphId', 'TruthCB_pdgId', 'TruthCB_charge',
+    'TruthCB_isSignal', 'TruthCB_bunchCrossing', 'TruthCB_eventIndex',
+    'TruthCB_pt', 'TruthCB_eta', 'TruthCB_phi', 'TruthCB_energy',
+    'TruthCB_hasBoundary',
+    'TruthCB_boundaryX', 'TruthCB_boundaryY', 'TruthCB_boundaryZ', 'TruthCB_boundaryT',
+    'TruthCB_boundaryPx', 'TruthCB_boundaryPy', 'TruthCB_boundaryPz', 'TruthCB_boundaryE',
+    'TruthCB_boundaryPt', 'TruthCB_boundaryEta', 'TruthCB_boundaryPhi',
+    'TruthCB_simEnergyHGCAL', 'TruthCB_levelFlags',
+    'TruthCB_parentGraphId', 'TruthCB_genRootGraphId',
+]
+
+# Reco <-> TruthCB association tables, same count/offset + flat Links layout as the
+# SIM_ASSOC_TABLES: <reco>ToTruthCB rows are parallel to the reco collection and the
+# link index is a TruthCB row; TruthCBTo<reco> rows are parallel to TruthCB and the
+# link index is a reco row. Reco->truth links carry sharedEnergy (GeV), truth->reco
+# links the sim-normalised sharedEnergyFraction; both carry graphId and score (lower
+# is better). Absent tables are skipped like every optional group.
+TRUTH_ASSOC_RECO = {"ticlTrackstersCLUE3DHigh": "CLUE3DHigh", "LayerCluster": "LayerCluster",
+                    "ticlTracksterLinks": "Links"}
+TRUTH_ASSOC_VALUES = ("graphId", "sharedEnergy", "sharedEnergyFraction", "score")
+# table name -> (source group, target group)
+TRUTH_ASSOC_TABLES = {}
+for _reco_grp, _reco_short in TRUTH_ASSOC_RECO.items():
+    TRUTH_ASSOC_TABLES[f"{_reco_short}ToTruthCB"] = (_reco_grp, TRUTH_CB_GROUP)
+    TRUTH_ASSOC_TABLES[f"TruthCBTo{_reco_short}"] = (TRUTH_CB_GROUP, _reco_grp)
+for _name in TRUTH_ASSOC_TABLES:
+    BRANCH_GROUPS[_name] = _assoc_branches(_name, TRUTH_ASSOC_VALUES)
+
+# <group>: (bunchCrossing branch, event branch); signal iff both are 0.
+PILEUP_KEYS = {
+    "SimCluster": ("SimCluster_bunchCrossing", "SimCluster_eventId"),
+    "MergedSimCluster": ("MergedSimCluster_bunchCrossing", "MergedSimCluster_eventId"),
+    "MergedCaloTruthMergedSimCluster": ("MergedCaloTruthMergedSimCluster_bunchCrossing",
+                                        "MergedCaloTruthMergedSimCluster_eventId"),
+    TRUTH_CB_GROUP: ("TruthCB_bunchCrossing", "TruthCB_eventIndex"),
+}
+
+
+def _derive_truth_cb_flags(data):
+    """TruthCB_hasHGCALHits: the object left sim energy in HGCAL (a barrel crosser or a
+    particle absorbed before the calorimeter has none and is not a trainable target)."""
+    if "TruthCB_simEnergyHGCAL" in data.fields:
+        data["TruthCB_hasHGCALHits"] = data["TruthCB_simEnergyHGCAL"] > 0
 
 
 def _derive_sim_trackster_flags(per_file):
@@ -317,10 +380,14 @@ ENDCAP_KEY = {
     # boundary and boundaryZ is exactly 0.
     "ticlSimTracksters": "ticlSimTracksters_boundaryZ",
     "ticlSimTrackstersFromCPs": "ticlSimTrackstersFromCPs_boundaryZ",
+    # MC-truth graph calo-boundary objects: side of the boundary crossing; the
+    # GEN eta decides when boundaryZ is exactly 0 (a target without checkpoint).
+    "TruthCB": "TruthCB_boundaryZ",
 }
 ENDCAP_KEY_FALLBACK = {
     "ticlSimTracksters": "ticlSimTracksters_barycenter_z",
     "ticlSimTrackstersFromCPs": "ticlSimTrackstersFromCPs_barycenter_z",
+    "TruthCB": "TruthCB_eta",
 }
 # SimTICLCand (and SimCandidate2Tracksters) rows are parallel to
 # ticlSimTrackstersFromCPs and reuse its mask. The association tables reuse the
@@ -478,23 +545,27 @@ def _split_layerclusters(d, keep, maps, flip):
               'LayerCluster_nHits', 'LayerCluster_seedDetId'):
         out[f] = d[f][k]
 
-    i, q, n = _split_matches(d['LayerCluster_SimCluster_MatchIdx'],
-                             d['LayerCluster_SimCluster_MatchQual'],
-                             d['LayerCluster_SimClusterNumMatch'],
-                             nrow, k, maps['SimCluster'])
-    out['LayerCluster_SimCluster_MatchIdx'] = i
-    out['LayerCluster_SimCluster_MatchQual'] = q
-    out['LayerCluster_SimClusterNumMatch'] = n
+    # The legacy truth matches are optional: a nanoTruth_cfg.py file has none
+    # (its layer-cluster truth is the LayerClusterToTruthCB table).
+    if 'LayerCluster_SimCluster_MatchIdx' in d.fields and 'SimCluster' in maps:
+        i, q, n = _split_matches(d['LayerCluster_SimCluster_MatchIdx'],
+                                 d['LayerCluster_SimCluster_MatchQual'],
+                                 d['LayerCluster_SimClusterNumMatch'],
+                                 nrow, k, maps['SimCluster'])
+        out['LayerCluster_SimCluster_MatchIdx'] = i
+        out['LayerCluster_SimCluster_MatchQual'] = q
+        out['LayerCluster_SimClusterNumMatch'] = n
 
     # CaloParticles are not stored in this file so the collection is not
     # split; indices still refer to the ORIGINAL event's CaloPart list.
-    i, q, n = _split_matches(d['LayerCluster_CaloPart_MatchIdx'],
-                             d['LayerCluster_CaloPart_MatchQual'],
-                             d['LayerCluster_CaloPartNumMatch'],
-                             nrow, k, None)
-    out['LayerCluster_CaloPart_MatchIdx'] = i
-    out['LayerCluster_CaloPart_MatchQual'] = q
-    out['LayerCluster_CaloPartNumMatch'] = n
+    if 'LayerCluster_CaloPart_MatchIdx' in d.fields:
+        i, q, n = _split_matches(d['LayerCluster_CaloPart_MatchIdx'],
+                                 d['LayerCluster_CaloPart_MatchQual'],
+                                 d['LayerCluster_CaloPartNumMatch'],
+                                 nrow, k, None)
+        out['LayerCluster_CaloPart_MatchIdx'] = i
+        out['LayerCluster_CaloPart_MatchQual'] = q
+        out['LayerCluster_CaloPartNumMatch'] = n
 
     if flip:
         out['LayerCluster_z'] = -out['LayerCluster_z']
@@ -607,7 +678,12 @@ def _split_simtracksters(d, grp, keep_t, lc_map, sc_map, flip):
     seed_b, flag_b = f"{grp}_seedIndex", f"{grp}_seedIsCaloParticle"
     if seed_b in d.fields and flag_b in d.fields:
         seed = d[seed_b]
-        out[seed_b] = ak.where(d[flag_b], seed, _remap(seed, sc_map))[keep_t]
+        if sc_map is None:
+            # no SimCluster table in this file (nanoTruth_cfg.py output): the
+            # index keeps referring to the ORIGINAL event's SimCluster collection
+            out[seed_b] = seed[keep_t]
+        else:
+            out[seed_b] = ak.where(d[flag_b], seed, _remap(seed, sc_map))[keep_t]
     if flip:
         # z-reflection: position z, eta and momentum z of the seed flip sign
         # (boundaryPhi is left alone: upstream it holds the eta value anyway)
@@ -617,31 +693,59 @@ def _split_simtracksters(d, grp, keep_t, lc_map, sc_map, flip):
     return out
 
 
-def _split_assoc(d, name, keep_src, target_map):
-    """Split a one-to-many trackster association table (SIM_ASSOC_TABLES).
+def _split_truthcb(d, k, flip):
+    """TruthCB (MC-truth graph calo-boundary objects): row-aligned, no index
+    column points into another parquet table. graphId, parentGraphId and
+    genRootGraphId are truth-graph particle ids and pass through unchanged (the
+    parent of a boundary particle is normally not a boundary particle itself)."""
+    out = {f: d[f][k] for f in d.fields}
+    if flip:
+        # z-reflection: position z, momentum z and eta flip sign; x, y, phi, pt,
+        # energies and times are untouched
+        for f in ("TruthCB_boundaryZ", "TruthCB_boundaryEta", "TruthCB_boundaryPz",
+                  "TruthCB_eta"):
+            if f in out:
+                out[f] = -out[f]
+    return out
 
-    Rows are parallel to the source trackster collection, whose endcap mask is
-    reused; the linked indices are remapped into the split target collection
-    and links into the removed endcap are dropped. Count/offset branches are
-    recomputed."""
+
+# Value columns of a one-to-many association link table, in output order: the
+# TICL reco<->sim tables carry (sharedEnergy, score), the truth tables add
+# graphId and use sharedEnergyFraction in the truth->reco direction. Values are
+# never remapped, only filtered with their link.
+ASSOC_VALUE_COLS = ("sharedEnergy", "sharedEnergyFraction", "score", "graphId")
+
+
+def _split_assoc(d, name, keep_src, target_map):
+    """Split a one-to-many association table (SIM_ASSOC_TABLES, TRUTH_ASSOC_TABLES).
+
+    Rows are parallel to the source collection, whose endcap mask is reused;
+    the linked indices are remapped into the split target collection and links
+    into the removed endcap are dropped. Count/offset branches are recomputed;
+    every value column present in the file follows its link."""
     cnt_b, off_b = f"{name}_n{name}Links", f"{name}_o{name}Links"
-    idx_b, e_b, s_b = (f"{name}Links_index", f"{name}Links_sharedEnergy",
-                       f"{name}Links_score")
+    idx_b = f"{name}Links_index"
+    val_bs = [f"{name}Links_{v}" for v in ASSOC_VALUE_COLS if f"{name}Links_{v}" in d.fields]
+
+    if not ak.all(ak.num(d[cnt_b]) == ak.num(keep_src)):
+        raise RuntimeError(
+            f"{name}: rows are not parallel to its source collection, so its "
+            "endcap mask cannot be reused")
 
     idx = _regroup(_remap(d[idx_b], target_map), d[cnt_b])[keep_src]
-    energy = _regroup(d[e_b], d[cnt_b])[keep_src]
-    score = _regroup(d[s_b], d[cnt_b])[keep_src]
+    vals = {b: _regroup(d[b], d[cnt_b])[keep_src] for b in val_bs}
 
     good = idx >= 0
-    idx, energy, score = idx[good], energy[good], score[good]
+    idx = idx[good]
+    vals = {b: v[good] for b, v in vals.items()}
 
     out = {}
     out[f"n{name}"] = ak.num(idx)
     out[cnt_b] = ak.num(idx, axis=2)
     out[off_b] = _exclusive_prefix_sum(out[cnt_b])
     out[idx_b] = ak.flatten(idx, axis=2)
-    out[e_b] = ak.flatten(energy, axis=2)
-    out[s_b] = ak.flatten(score, axis=2)
+    for b, v in vals.items():
+        out[b] = ak.flatten(v, axis=2)
     out[f"n{name}Links"] = ak.num(out[idx_b])
     return out
 
@@ -668,7 +772,7 @@ def build_endcap(batch, side):
         v = batch[grp][key]
         fallback = ENDCAP_KEY_FALLBACK.get(grp)
         if fallback is not None and fallback in batch[grp].fields:
-            v = ak.where(v != 0, v, batch[grp][fallback])
+            v = ak.where((v != 0) & ~np.isnan(v), v, batch[grp][fallback])
         keep[grp] = (v >= 0) if side > 0 else (v < 0)
 
     maps = {grp: _index_map(keep[grp])
@@ -676,37 +780,44 @@ def build_endcap(batch, side):
                         "MergedCaloTruthMergedSimCluster", "LayerCluster",
                         CAND_TRACKSTER_COLLECTION,
                         "ticlTrackstersCLUE3DHigh", "ticlTracksterLinks",
-                        "ticlSimTracksters", "ticlSimTrackstersFromCPs")
+                        "ticlSimTracksters", "ticlSimTrackstersFromCPs",
+                        "TruthCB")
             if grp in keep}
 
     out = {}
-    out["RecHitHGC"] = _split_rechits(batch["RecHitHGC"], keep, maps, flip)
-    # The merged SimCluster families are optional: MergedSimCluster is absent
-    # from pileup samples (nanoML runMergedSimClusters=0, pepr's merger is not
-    # pileup-aware), MergedCaloTruthMergedSimCluster from pre-20_1 files. The
+    # Every legacy group is optional. nanoML_cfg.py files carry all of them,
+    # except MergedSimCluster for pileup samples (runMergedSimClusters=0) and
+    # MergedCaloTruthMergedSimCluster for pre-20_1 files; nanoTruth_cfg.py files
+    # carry no RecHit, SimCluster, MergedSimCluster or TICLCand tables. The
     # column order is kept so that schemas stay mergeable with older files.
-    for grp in ("MergedSimCluster", "MergedCaloTruthMergedSimCluster"):
+    if "RecHitHGC" in keep and "LayerCluster" in maps:
+        out["RecHitHGC"] = _split_rechits(batch["RecHitHGC"], keep, maps, flip)
+    for grp in ("MergedSimCluster", "MergedCaloTruthMergedSimCluster", "SimCluster"):
         if grp in keep:
             out[grp] = _split_simclusters(batch[grp], grp, keep[grp], flip)
-    out["SimCluster"] = _split_simclusters(
-        batch["SimCluster"], "SimCluster", keep["SimCluster"], flip)
-    out["LayerCluster"] = _split_layerclusters(batch["LayerCluster"], keep, maps, flip)
-    out["TICLCand"] = _split_ticlcands(batch["TICLCand"], keep["TICLCand"], flip)
-    out["Candidate2Tracksters"] = _split_candidates(
-        batch["Candidate2Tracksters"], keep["TICLCand"],
-        maps[CAND_TRACKSTER_COLLECTION])
+    if "LayerCluster" in keep:
+        out["LayerCluster"] = _split_layerclusters(batch["LayerCluster"], keep, maps, flip)
+    if "TICLCand" in keep:
+        out["TICLCand"] = _split_ticlcands(batch["TICLCand"], keep["TICLCand"], flip)
+        if (CAND_TRACKSTER_COLLECTION in maps
+                and _present(batch, "Candidate2Tracksters",
+                             "Candidate2TrackstersIndices_tracksterIndex")):
+            out["Candidate2Tracksters"] = _split_candidates(
+                batch["Candidate2Tracksters"], keep["TICLCand"],
+                maps[CAND_TRACKSTER_COLLECTION])
     for grp in ("ticlTrackstersCLUE3DHigh", "ticlTracksterLinks",
                 "ticlTrackstersRecovery"):
-        out[grp] = _split_tracksters(batch[grp], grp, keep[grp],
-                                     maps["LayerCluster"], flip)
+        if grp in keep and "LayerCluster" in maps:
+            out[grp] = _split_tracksters(batch[grp], grp, keep[grp],
+                                         maps["LayerCluster"], flip)
 
     # --- MC truth: SimTracksters, sim candidates, reco<->sim associations ---
     # (all optional: skipped for files produced without the SimTrackster tables)
     for grp in SIM_TRACKSTER_GROUPS:
-        if grp in keep:
+        if grp in keep and "LayerCluster" in maps:
             out[grp] = _split_simtracksters(batch[grp], grp, keep[grp],
                                             maps["LayerCluster"],
-                                            maps["SimCluster"], flip)
+                                            maps.get("SimCluster"), flip)
 
     if ("ticlSimTrackstersFromCPs" in keep
             and _present(batch, "SimTICLCand", "SimTICLCand_eta")):
@@ -724,6 +835,17 @@ def build_endcap(batch, side):
                 maps["ticlSimTracksters"], prefix="SimCandidate2Tracksters")
 
     for name, (src_grp, tgt_grp) in SIM_ASSOC_TABLES.items():
+        if (src_grp in keep and tgt_grp in maps
+                and _present(batch, name, f"{name}Links_index")):
+            out[name] = _split_assoc(batch[name], name, keep[src_grp], maps[tgt_grp])
+
+    # --- MC-truth graph: calo-boundary objects and the reco <-> TruthCB links ---
+    # (optional: only files produced with the truth-graph tables carry them).
+    # A link whose target landed in the other endcap is dropped by _split_assoc;
+    # for HGCAL objects that is ~never, barrel crossers excepted.
+    if "TruthCB" in keep:
+        out["TruthCB"] = _split_truthcb(batch["TruthCB"], keep["TruthCB"], flip)
+    for name, (src_grp, tgt_grp) in TRUTH_ASSOC_TABLES.items():
         if (src_grp in keep and tgt_grp in maps
                 and _present(batch, name, f"{name}Links_index")):
             out[name] = _split_assoc(batch[name], name, keep[src_grp], maps[tgt_grp])
@@ -1006,11 +1128,12 @@ def process_chunk(tree, start, stop):
         # signal iff bunchCrossing == 0 AND eventId == 0; anything
         # else is pileup (either OOT via BX != 0 or in-time PU
         # minbias via eventId != 0).
-        if group_name in ("SimCluster", "MergedSimCluster", "MergedCaloTruthMergedSimCluster"):
-            bx_branch = f"{group_name}_bunchCrossing"
-            ev_branch = f"{group_name}_eventId"
+        if group_name in PILEUP_KEYS:
+            bx_branch, ev_branch = PILEUP_KEYS[group_name]
             is_pileup = ~((data[bx_branch] == 0) & (data[ev_branch] == 0))
             data[f"{group_name}_isPileup"] = is_pileup
+        if group_name == TRUTH_CB_GROUP:
+            _derive_truth_cb_flags(data)
 
         per_file[group_name] = data
 
@@ -1050,9 +1173,10 @@ def main():
     print(f"Collections: {', '.join(BRANCH_GROUPS.keys())}")
     print(f"Derived fields: SimCluster_isPileup, MergedSimCluster_isPileup, "
           f"MergedCaloTruthMergedSimCluster_isPileup, "
-          f"ticlSimTracksters_seedIsCaloParticle, ticlSimTrackstersFromCPs_seedIsCaloParticle")
+          f"ticlSimTracksters_seedIsCaloParticle, ticlSimTrackstersFromCPs_seedIsCaloParticle, "
+          f"TruthCB_isPileup, TruthCB_hasHGCALHits")
     print(f"Endcap split: 2 output events per input event "
-          f"(-z endcap mirrored via z->-z, eta->-eta)")
+          f"(-z endcap mirrored via z->-z, eta->-eta; TruthCB by the sign of boundaryZ)")
     print(f"Candidate links assumed to point into: {CAND_TRACKSTER_COLLECTION}")
     print(f"Writing incrementally to {output.describe()}")
 
