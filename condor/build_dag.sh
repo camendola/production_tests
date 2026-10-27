@@ -24,6 +24,10 @@
 #        [--flavour workday] [--ncpus N] [--memory MB] [--disk KB] [--nthreads 1] \
 #        [--canary 0] [--seed-base N] [--retry 2] [--workdir DIR] [--outfile FILE.dag]
 #
+# --workdir (DAG, submit file, logs and a copy of run_stage.sh) must be on AFS at
+# CERN: the schedds reject /eos executables and logs, while the CMSSW area and
+# the outputs may be on EOS (they only appear in the job arguments).
+#
 # Seeds: replica i uses seed_base + i (minbias: + 500000). seed_base defaults
 # to round(energy*1000) for a fixed energy and particle*100000 + round(minE*1000)
 # for a flat range; the canary uses seed_base + nreplicas.
@@ -112,7 +116,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [ -n "$WORKDIR" ] || WORKDIR="$SCRIPT_DIR"
 mkdir -p "$WORKDIR/logs"
 WORKDIR="$(cd "$WORKDIR" && pwd)"
-RUNSTAGE="$SCRIPT_DIR/run_stage.sh"
+# The CERN schedds refuse a submit file that names /eos in executable, log,
+# output, error, initialdir or transfer_input_files (SUBMIT_REQUIREMENT_NoEos);
+# only the job arguments may carry /eos paths (cmssw=, prodtests=, outdir=).
+# The repo itself may live on EOS, so the node script is copied next to the DAG
+# (the work dir, which must be on AFS) and the submit file points at that copy.
+if [ "$SITE" = cern ]; then
+    case "$WORKDIR" in /eos/*) die "--workdir must not be on EOS at CERN (the schedds refuse /eos executables and logs); use the AFS home" ;; esac
+fi
+RUNSTAGE="$WORKDIR/run_stage.sh"
+[ "$SCRIPT_DIR/run_stage.sh" -ef "$RUNSTAGE" ] || cp -f "$SCRIPT_DIR/run_stage.sh" "$RUNSTAGE"
 [ -n "$PRODTESTS" ] || PRODTESTS="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if [ -z "$OUTDIR" ]; then
