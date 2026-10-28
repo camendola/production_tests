@@ -165,6 +165,12 @@ _tracksterVariables = cms.PSet(
     barycenter_z=Var("barycenter.z", "float", doc="Barycenter z [cm]"),
     barycenter_eta=Var("barycenter.eta", "float", doc="Barycenter eta"),
     barycenter_phi=Var("barycenter.phi", "float", doc="Barycenter phi"),
+    EV1=Var("eigenvalues()[0]", "float", doc="Trackster PCA eigenvalues 0"),
+    EV2=Var("eigenvalues()[1]", "float", doc="Trackster PCA eigenvalues 1"),
+    EV3=Var("eigenvalues()[2]", "float", doc="Trackster PCA eigenvalues 2"),
+    eVector0_x=Var("eigenvectors()[0].x", "float", doc="Trackster PCA principal axis, x component"),
+    eVector0_y=Var("eigenvectors()[0].z", "float", doc="Trackster PCA principal axis, y component"),
+    eVector0_z=Var("eigenvectors()[0].y", "float", doc="Trackster PCA principal axis, z component"),
     time=Var("time", "float", doc="HGCAL time"),
     timeError=Var("timeError", "float", doc="HGCAL time error"),
 )
