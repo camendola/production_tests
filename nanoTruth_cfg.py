@@ -296,6 +296,69 @@ for _recoLabel, _recoShort in _simAssocRecoLabels.items():
 # ---------------------------------------------------------------------------
 process.load("PhysicsTools.TruthInfo.truthNanoTables_cff")
 
+# The adaptive working points of the reco -> truth maps. truthNanoTables_cff writes the
+# Fixed map (every match, best first) and TruthToReco; the adaptive points keep one match
+# per reco object. Each <A> table below is a count/offset table with its <A>Links table.
+#   calo-boundary (RECO.py truthAssoc=1): links index TruthCB, candidates are boundary
+#     particles only, so an adaptive point picks the best one and cannot climb.
+#   full graph (RECO.py truthFullGraph=1): links index TruthFG, the particles a reco object
+#     may be assigned to (truthBranchTargets "assignableRoots") with HGCAL sim energy, so
+#     an adaptive point can answer with an ancestor of the boundary particles.
+# A RECO file without the full-graph maps gets empty TruthFG tables (skipNonExistingSrc).
+from PhysicsTools.TruthInfo.truthParticleFlatTable_cfi import truthParticleFlatTable
+from PhysicsTools.TruthInfo.truthBranchAssociationFlatTable_cfi import truthBranchAssociationFlatTable
+
+_adaptiveWorkingPoints = ["AdaptiveTight", "AdaptiveNominal"]
+# reco short name -> (associator module suffix, reco collection label)
+_truthAssocRecos = {
+    "CLUE3DHigh": ("TracksterAssociators", "ticlTrackstersCLUE3DHigh"),
+    "LayerCluster": ("LayerClusterAssociators", "hgcalMergeLayerClusters"),
+}
+
+process.ticlTruthFGTable = truthParticleFlatTable.clone(
+    targets=cms.InputTag("truthBranchTargets", "assignableRoots"),
+    requireHGCALHits=True,
+    name="TruthFG",
+    doc="MC-truth graph particles a reco object may be assigned to (full graph, signal and pile-up) "
+        "with HGCAL sim energy; boundary columns are zero when hasBoundary is false",
+)
+
+_truthAssocTableProducers = [process.ticlTruthFGTable]
+for _recoShort, (_assocSuffix, _recoLabel) in _truthAssocRecos.items():
+    # Calo-boundary: the adaptive points next to the Fixed table of truthNanoTables_cff.
+    for _wp in _adaptiveWorkingPoints:
+        _name = f"{_recoShort}ToTruthCB{_wp}"
+        setattr(process, f"ticlTruthAssoc{_name}Table", truthBranchAssociationFlatTable.clone(
+            src=cms.InputTag(f"truthCaloBoundary{_assocSuffix}", f"{_recoLabel}RecoToTruth{_wp}"),
+            targets=cms.InputTag("ticlTruthCBTable", "selected"),
+            direction="recoToTruth",
+            name=_name,
+            doc=f"{_recoLabel} -> TruthCB, {_wp} working point: the best calo-boundary particle",
+        ))
+        _truthAssocTableProducers.append(getattr(process, f"ticlTruthAssoc{_name}Table"))
+    # Full graph: Fixed, the adaptive points and TruthToReco.
+    for _wp in ["Fixed"] + _adaptiveWorkingPoints:
+        _name = f"{_recoShort}ToTruthFG" + ("" if _wp == "Fixed" else _wp)
+        setattr(process, f"ticlTruthAssoc{_name}Table", truthBranchAssociationFlatTable.clone(
+            src=cms.InputTag(f"truthBranch{_assocSuffix}", f"{_recoLabel}RecoToTruth{_wp}"),
+            targets=cms.InputTag("ticlTruthFGTable", "selected"),
+            direction="recoToTruth",
+            name=_name,
+            doc=f"{_recoLabel} -> TruthFG, {_wp} working point"
+                + (": every assignable particle sharing energy, best first" if _wp == "Fixed"
+                   else ": one particle, the adaptive climb may answer with an ancestor"),
+        ))
+        _truthAssocTableProducers.append(getattr(process, f"ticlTruthAssoc{_name}Table"))
+    _name = f"TruthFGTo{_recoShort}"
+    setattr(process, f"ticlTruthAssoc{_name}Table", truthBranchAssociationFlatTable.clone(
+        src=cms.InputTag(f"truthBranch{_assocSuffix}", f"{_recoLabel}TruthToReco"),
+        targets=cms.InputTag("ticlTruthFGTable", "selected"),
+        direction="truthToReco",
+        name=_name,
+        doc=f"TruthFG -> {_recoLabel}: every reco object sharing energy, best first",
+    ))
+    _truthAssocTableProducers.append(getattr(process, f"ticlTruthAssoc{_name}Table"))
+
 process.nanoTruthTask = cms.Task(
     process.nanoMetadata,
     process.hgcalGenPartTable,
@@ -309,6 +372,7 @@ process.nanoTruthTask = cms.Task(
     process.ticlSimCandidateExtraTable,
     *_simAssocTableProducers,
     process.truthNanoTablesTask,
+    *_truthAssocTableProducers,
 )
 process.nanoAOD_step = cms.Path(process.nanoTruthTask)
 process.endjob_step = cms.EndPath(process.endOfProcess)
