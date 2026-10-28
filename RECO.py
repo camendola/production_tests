@@ -149,18 +149,24 @@ if options.truthAssoc:
 if options.truthFullGraph:
     # The documented customise (customiseTruthGraphAssociators) also schedules the track,
     # vertex, PF-cluster and HLT domains, whose inputs this chain does not carry, so only
-    # the trackster domain is taken: every scheduled TICL trackster producer, found by type.
+    # the trackster domain (every scheduled TICL trackster producer, found by type) and the
+    # layer-cluster domain (hgcalMergeLayerClusters) are taken.
     # (setTracksterLabelsFromProcess cannot be used: it must run before the associator
     # cff is imported, which truthAssoc=1 already did; the labels are discovered the same
     # way and set on a clone instead.)
     from SimGeneral.TruthGraphAssociatorProducers.truthGraphAssociationLabels_cff import tracksterLabelsFromProcess
-    from SimGeneral.TruthGraphAssociatorProducers.truthGraphAssociators_cff import truthBranchTargets, truthBranchTracksterAssociators
+    from SimGeneral.TruthGraphAssociatorProducers.truthGraphAssociators_cff import (
+        truthBranchTargets, truthBranchTracksterAssociators, truthBranchLayerClusterAssociators)
     _tracksterLabels = tracksterLabelsFromProcess(process) or ["ticlTrackstersCLUE3DHigh"]
     process.truthBranchTargets = truthBranchTargets
     process.truthBranchTracksterAssociators = truthBranchTracksterAssociators.clone(
         recoCollections=[cms.InputTag(l) for l in _tracksterLabels],
         pfRecHits=cms.VInputTag())
-    process.truthFullGraphAssoc = cms.Sequence(process.truthBranchTargets + process.truthBranchTracksterAssociators)
+    # hgcalMergeLayerClusters against the same full-graph targets (stock defaults).
+    process.truthBranchLayerClusterAssociators = truthBranchLayerClusterAssociators.clone()
+    process.truthFullGraphAssoc = cms.Sequence(process.truthBranchTargets
+                                               + process.truthBranchTracksterAssociators
+                                               + process.truthBranchLayerClusterAssociators)
     process.recosim_step *= process.truthFullGraphAssoc
 
 # Print out event content for debugging
@@ -201,6 +207,7 @@ process.FEVTDEBUGoutput.outputCommands.extend(["keep *_MergedTrackTruth_*_*",
     "keep *_truthCaloBoundaryLayerClusterAssociators_*_*",
     "keep *_truthBranchTargets_*_*",
     "keep *_truthBranchTracksterAssociators_*_*",
+    "keep *_truthBranchLayerClusterAssociators_*_*",
     # MC-truth tracksters and their associations (see block above). The
     # FEVTDEBUG content already lists most of these;
     # they are repeated here so the file documents what nanoML relies on.
