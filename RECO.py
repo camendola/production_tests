@@ -17,7 +17,7 @@ options.register("useTICL", 0, VarParsing.multiplicity.singleton, VarParsing.var
 options.register("truthAssoc", 1, VarParsing.multiplicity.singleton, VarParsing.varType.int,
     "associate ticlTrackstersCLUE3DHigh and hgcalMergeLayerClusters to the calo-boundary "
     "particles of the MC-truth graph (1=True, 0=False)")
-options.register("truthFullGraph", 0, VarParsing.multiplicity.singleton, VarParsing.varType.int,
+options.register("truthFullGraph", 1, VarParsing.multiplicity.singleton, VarParsing.varType.int,
     "also run the stock full-graph adaptive trackster associators (every TICL trackster "
     "collection, every truth level, adaptive climb) for merged-topology studies (1=True, 0=False)")
 options.parseArguments()
@@ -158,7 +158,12 @@ if options.truthFullGraph:
     from SimGeneral.TruthGraphAssociatorProducers.truthGraphAssociators_cff import (
         truthBranchTargets, truthBranchTracksterAssociators, truthBranchLayerClusterAssociators)
     _tracksterLabels = tracksterLabelsFromProcess(process) or ["ticlTrackstersCLUE3DHigh"]
-    process.truthBranchTargets = truthBranchTargets
+    # Pile-up particles are level targets too and no pt floor, as for the calo-boundary
+    # targets (the stock defaults are the signal-only validation denominators).
+    process.truthBranchTargets = truthBranchTargets.clone(
+        truthToRecoSignalOnly=False,
+        branchSelector=dict(ptMin=0.0),
+    )
     process.truthBranchTracksterAssociators = truthBranchTracksterAssociators.clone(
         recoCollections=[cms.InputTag(l) for l in _tracksterLabels],
         pfRecHits=cms.VInputTag())
