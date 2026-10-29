@@ -52,6 +52,7 @@ Options:
   --partname NAME        name used in the output file names (default: derived from
                          the pdgId, e.g. photons, pions, K0L, taus, pdg<N>)
   --fine-calo            useFineCalo=1 (fine calorimeter truth, no pileup support)
+  --ticl                 useTICL=1 (use ticl_v6)
   --seed N               random seed for the GSD step (default: 1)
   --minE X               gun minimum energy in GeV (default: 20.0)
   --maxE X               gun maximum energy in GeV (default: 200.0)
@@ -225,6 +226,7 @@ run_chain() {
             --particle)    PARTICLE="$2"; [ "$partname_given" -eq 1 ] || PARTNAME=""; shift 2 ;;
             --partname)    PARTNAME="$2"; partname_given=1; shift 2 ;;
             --fine-calo)   USE_FINE_CALO=1;  shift ;;
+	        --ticl)        USE_TICL=1;       shift ;;
             --seed)        SEED="$2";        shift 2 ;;
             --minE|--mine) MIN_ENERGY="$2";  shift 2 ;;
             --maxE|--maxe) MAX_ENERGY="$2";  shift 2 ;;
@@ -403,7 +405,8 @@ run_chain() {
                 nThreads="$NTHREADS" \
                 inputFiles="file:$GSD_FILE" \
                 outputFile="$RECO_FILE" \
-                outputFileDQM="$DQM_FILE"
+                outputFileDQM="$DQM_FILE" \
+                useTICL="$USE_TICL"
     fi
 
     # ---- step 4: nanoML ---------------------------------------------------
@@ -440,4 +443,3 @@ run_chain() {
 
     echo "✅ All steps completed successfully!"
     echo "All files have been saved to: $OUTPUT_DIR"
-}

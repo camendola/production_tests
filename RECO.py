@@ -13,7 +13,7 @@ options.register('outputFileDQM', 'file:partGun_PDGid22_x96_Pt1.0To100.0_DQM_1.r
 options.register("nThreads", 1, VarParsing.multiplicity.singleton, VarParsing.varType.int,
     "number of threads")
 options.register("useTICL", 0, VarParsing.multiplicity.singleton, VarParsing.varType.int,
-    "use TICL v5 (1=True, 0=False)")
+    "use TICL v6 (1=True, 0=False)")
 options.register("truthAssoc", 1, VarParsing.multiplicity.singleton, VarParsing.varType.int,
     "associate ticlTrackstersCLUE3DHigh and hgcalMergeLayerClusters to the calo-boundary "
     "particles of the MC-truth graph (1=True, 0=False)")
@@ -24,7 +24,7 @@ options.parseArguments()
 
 # Import process based on useTICL flag
 if options.useTICL:
-    from reco_prodtools.templates.RECO_fragment import process  # ticl_v5 no longer exists; TICL is default in pre1
+    from reco_prodtools.templates.RECO_ticl_v6_fragment import process  
 else:
     from reco_prodtools.templates.RECO_fragment import process
 
